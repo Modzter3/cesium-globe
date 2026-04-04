@@ -14,8 +14,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
-        {/* Cesium widget styles — loaded from the public/ copy */}
-        <link rel="stylesheet" href="/cesium/Widgets/widgets.css" />
+        {/* Cesium CSS is loaded dynamically by GlobeViewer from CDN */}
         {/* Google Fonts */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link

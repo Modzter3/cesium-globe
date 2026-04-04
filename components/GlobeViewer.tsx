@@ -10,6 +10,12 @@ interface CoordState {
   alt: string;
 }
 
+const CESIUM_TOKEN =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJlYWEzYTYzMi1iYTMyLTQ5MjctYmEwMy05NGY1ZmQ5NGY0NzQiLCJpZCI6NDEzNTkzLCJpYXQiOjE3NzUyODI2Mjl9._sdtsqjhWpRKOwWKY7gMjh4fohPNRpz_WtaoTdgOHC4";
+
+const CESIUM_VERSION = "1.127";
+const CESIUM_CDN = `https://cesium.com/downloads/cesiumjs/releases/${CESIUM_VERSION}/Build/Cesium`;
+
 // ── Inline SVG icons ───────────────────────────────────────────
 const SatelliteIcon = () => (
   <svg viewBox="0 0 24 24" aria-hidden fill="none" stroke="currentColor"
@@ -46,6 +52,28 @@ const HomeIcon = () => (
   </svg>
 );
 
+// Load a script tag and resolve when done
+function loadScript(src: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
+    const s = document.createElement("script");
+    s.src = src;
+    s.async = false;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error(`Failed to load ${src}`));
+    document.head.appendChild(s);
+  });
+}
+
+// Load a stylesheet
+function loadCSS(href: string): void {
+  if (document.querySelector(`link[href="${href}"]`)) return;
+  const l = document.createElement("link");
+  l.rel = "stylesheet";
+  l.href = href;
+  document.head.appendChild(l);
+}
+
 // ── Component ──────────────────────────────────────────────────
 export default function GlobeViewer() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -57,87 +85,86 @@ export default function GlobeViewer() {
   const [mode, setMode] = useState<ImageryMode>("satellite");
   const [coords, setCoords] = useState<CoordState | null>(null);
   const [ready, setReady] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // ── Init ─────────────────────────────────────────────────────
   useEffect(() => {
-    // Must be set before Cesium loads so it can find workers / assets
-    (window as Window & { CESIUM_BASE_URL?: string }).CESIUM_BASE_URL = "/cesium";
-
     let active = true;
 
     const init = async () => {
-      const Cesium = await import("cesium");
-      if (!active || !containerRef.current) return;
-
-      // ──────────────────────────────────────────────────────────
-      // Replace this with your own token from ion.cesium.com
-      // ──────────────────────────────────────────────────────────
-      Cesium.Ion.defaultAccessToken =
-        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJlYWEzYTYzMi1iYTMyLTQ5MjctYmEwMy05NGY1ZmQ5NGY0NzQiLCJpZCI6NDEzNTkzLCJpYXQiOjE3NzUyODI2Mjl9._sdtsqjhWpRKOwWKY7gMjh4fohPNRpz_WtaoTdgOHC4";
-
-      // Build the base imagery layer (Bing Aerial via Ion asset 2)
-      const baseLayer = Cesium.ImageryLayer.fromProviderAsync(
-        Cesium.IonImageryProvider.fromAssetId(2)
-      );
-
-      const viewer = new Cesium.Viewer(containerRef.current, {
-        terrain: Cesium.Terrain.fromWorldTerrain(),
-        baseLayer,
-        // Hide all default chrome — we render our own HUD
-        animation: false,
-        baseLayerPicker: false,
-        fullscreenButton: false,
-        geocoder: false,
-        homeButton: false,
-        infoBox: false,
-        sceneModePicker: false,
-        selectionIndicator: false,
-        timeline: false,
-        navigationHelpButton: false,
-        navigationInstructionsInitiallyVisible: false,
-      });
-
-      // Atmosphere + lighting
-      viewer.scene.globe.enableLighting = true;
-      // viewer.scene.atmosphere does not have a `show` flag in Cesium 1.140
-      // Fog and sky atmosphere are enabled by default
-      viewer.scene.fog.enabled = true;
-      if (viewer.scene.skyAtmosphere) {
-        viewer.scene.skyAtmosphere.show = true;
-      }
-
-      // Start centred on the continental US, no animation
-      viewer.camera.flyTo({
-        destination: Cesium.Cartesian3.fromDegrees(-98.5, 39.5, 8_000_000),
-        duration: 0,
-      });
-
-      viewerRef.current = viewer;
-      setReady(true);
-
-      // Coordinate readout on mouse move
-      const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
-      handlerRef.current = handler;
-
-      handler.setInputAction(
+      try {
+        // Load Cesium CSS + JS from CDN
+        loadCSS(`${CESIUM_CDN}/Widgets/widgets.css`);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (e: any) => {
-          const ray = viewer.camera.getPickRay(e.endPosition);
-          if (!ray) return;
-          const pos = viewer.scene.globe.pick(ray, viewer.scene);
-          if (!pos) { setCoords(null); return; }
-          const carto = Cesium.Ellipsoid.WGS84.cartesianToCartographic(pos);
-          setCoords({
-            lat: Cesium.Math.toDegrees(carto.latitude).toFixed(4),
-            lon: Cesium.Math.toDegrees(carto.longitude).toFixed(4),
-            alt: (viewer.camera.positionCartographic.height / 1000).toFixed(1),
-          });
-        },
-        Cesium.ScreenSpaceEventType.MOUSE_MOVE
-      );
+        (window as any).CESIUM_BASE_URL = `${CESIUM_CDN}/`;
+        await loadScript(`${CESIUM_CDN}/Cesium.js`);
+
+        if (!active || !containerRef.current) return;
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const Cesium = (window as any).Cesium;
+        Cesium.Ion.defaultAccessToken = CESIUM_TOKEN;
+
+        const baseLayer = Cesium.ImageryLayer.fromProviderAsync(
+          Cesium.IonImageryProvider.fromAssetId(2)
+        );
+
+        const viewer = new Cesium.Viewer(containerRef.current, {
+          terrain: Cesium.Terrain.fromWorldTerrain(),
+          baseLayer,
+          animation: false,
+          baseLayerPicker: false,
+          fullscreenButton: false,
+          geocoder: false,
+          homeButton: false,
+          infoBox: false,
+          sceneModePicker: false,
+          selectionIndicator: false,
+          timeline: false,
+          navigationHelpButton: false,
+          navigationInstructionsInitiallyVisible: false,
+        });
+
+        viewer.scene.globe.enableLighting = true;
+        viewer.scene.fog.enabled = true;
+        if (viewer.scene.skyAtmosphere) {
+          viewer.scene.skyAtmosphere.show = true;
+        }
+
+        viewer.camera.flyTo({
+          destination: Cesium.Cartesian3.fromDegrees(-98.5, 39.5, 8_000_000),
+          duration: 0,
+        });
+
+        viewerRef.current = viewer;
+        if (active) setReady(true);
+
+        const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+        handlerRef.current = handler;
+
+        handler.setInputAction(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (e: any) => {
+            const ray = viewer.camera.getPickRay(e.endPosition);
+            if (!ray) return;
+            const pos = viewer.scene.globe.pick(ray, viewer.scene);
+            if (!pos) { setCoords(null); return; }
+            const carto = Cesium.Ellipsoid.WGS84.cartesianToCartographic(pos);
+            setCoords({
+              lat: Cesium.Math.toDegrees(carto.latitude).toFixed(4),
+              lon: Cesium.Math.toDegrees(carto.longitude).toFixed(4),
+              alt: (viewer.camera.positionCartographic.height / 1000).toFixed(1),
+            });
+          },
+          Cesium.ScreenSpaceEventType.MOUSE_MOVE
+        );
+      } catch (err) {
+        console.error(err);
+        if (active) setError("Failed to load CesiumJS. Check your connection.");
+      }
     };
 
-    init().catch(console.error);
+    init();
 
     return () => {
       active = false;
@@ -154,20 +181,19 @@ export default function GlobeViewer() {
       if (!viewerRef.current || newMode === mode) return;
       setMode(newMode);
 
-      const Cesium = await import("cesium");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const Cesium = (window as any).Cesium;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const layers = viewerRef.current.scene.imageryLayers as any;
       layers.removeAll();
 
       if (newMode === "satellite") {
-        // Bing Aerial
         layers.add(
           Cesium.ImageryLayer.fromProviderAsync(
             Cesium.IonImageryProvider.fromAssetId(2)
           )
         );
       } else if (newMode === "osm") {
-        // OpenStreetMap — constructor style (no fromUrl in this version)
         layers.add(
           new Cesium.ImageryLayer(
             new Cesium.OpenStreetMapImageryProvider({
@@ -176,7 +202,6 @@ export default function GlobeViewer() {
           )
         );
       } else {
-        // Earth at Night (Ion asset 3812)
         layers.add(
           Cesium.ImageryLayer.fromProviderAsync(
             Cesium.IonImageryProvider.fromAssetId(3812)
@@ -188,9 +213,10 @@ export default function GlobeViewer() {
   );
 
   // ── Fly home ─────────────────────────────────────────────────
-  const flyHome = useCallback(async () => {
+  const flyHome = useCallback(() => {
     if (!viewerRef.current) return;
-    const Cesium = await import("cesium");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const Cesium = (window as any).Cesium;
     viewerRef.current.camera.flyTo({
       destination: Cesium.Cartesian3.fromDegrees(-98.5, 39.5, 8_000_000),
       duration: 1.5,
@@ -218,6 +244,16 @@ export default function GlobeViewer() {
           </div>
         </div>
       </header>
+
+      {error && (
+        <div style={{
+          position: "fixed", inset: 0, display: "flex",
+          alignItems: "center", justifyContent: "center",
+          color: "#f87171", fontSize: "1rem", background: "#0b0e14"
+        }}>
+          {error}
+        </div>
+      )}
 
       {ready && (
         <nav className="controls" aria-label="Map controls">
