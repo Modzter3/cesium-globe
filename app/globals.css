@@ -116,6 +116,71 @@ body {
   flex-shrink: 0;
 }
 
+/* ── Flight counter ─────────────────────────────────────────── */
+.flight-counter {
+  position: absolute;
+  top: 1.25rem;
+  right: 1.5rem;
+  z-index: 10;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.7);
+  background: rgba(11, 14, 20, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 9999px;
+  padding: 0.3rem 0.8rem;
+  backdrop-filter: blur(10px);
+  letter-spacing: 0.03em;
+}
+
+/* ── Flight info card ────────────────────────────────────────── */
+.flight-card {
+  position: absolute;
+  top: 4.5rem;
+  right: 1.5rem;
+  z-index: 20;
+  min-width: 200px;
+  background: rgba(11, 14, 20, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 1rem 1.1rem;
+  backdrop-filter: blur(16px);
+  color: #fff;
+  font-size: 0.78rem;
+  pointer-events: auto;
+}
+
+.flight-card-close {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.8rem;
+  cursor: pointer;
+  color: rgba(255,255,255,0.4);
+  font-size: 0.9rem;
+  line-height: 1;
+}
+.flight-card-close:hover { color: #fff; }
+
+.flight-card-callsign {
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.6rem;
+  color: #00ffff;
+  font-family: "JetBrains Mono", monospace;
+}
+
+.flight-card-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.2rem 0;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  color: rgba(255,255,255,0.75);
+}
+.flight-card-row:last-child { border-bottom: none; }
+.flight-card-row span:first-child { color: rgba(255,255,255,0.4); }
+
 /* ── Coordinate readout ──────────────────────────────────────── */
 .coords {
   position: absolute;

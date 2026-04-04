@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  output: "export",
+  // No static export — we need server-side API routes for OpenSky proxy
 };
 
 export default nextConfig;
