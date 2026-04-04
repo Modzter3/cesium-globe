@@ -28,12 +28,62 @@ interface AircraftData {
   emergency: string;
 }
 
+interface VesselData {
+  mmsi: string;
+  name: string;
+  callsign: string;
+  lat: number;
+  lon: number;
+  sog: number;         // knots
+  cog: number;         // degrees
+  heading: number;
+  shipType: number;
+  destination: string;
+  draught: number;
+  length: number;
+  width: number;
+}
+
+// Ship type category label
+function shipTypeLabel(type: number): string {
+  if (type >= 60 && type <= 69) return "PASSENGER";
+  if (type >= 70 && type <= 79) return "CARGO";
+  if (type >= 80 && type <= 89) return "TANKER";
+  if (type === 30) return "FISHING";
+  if (type === 36 || type === 37) return "SAILING";
+  if (type >= 50 && type <= 59) return "SPECIAL";
+  if (type >= 20 && type <= 29) return "WIG";
+  return "VESSEL";
+}
+
+// Ship color by type
+function shipColorCss(type: number): string {
+  if (type >= 70 && type <= 79) return "#ffa500";  // cargo - orange
+  if (type >= 80 && type <= 89) return "#ff4444";  // tanker - red
+  if (type >= 60 && type <= 69) return "#44aaff";  // passenger - blue
+  if (type === 30) return "#44ff88";               // fishing - green
+  return "#ffffff";                                  // default - white
+}
+
+// Ship icon SVG as data URI
+function shipSvgUri(colorCss: string, headingDeg: number): string {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">
+    <g transform="rotate(${headingDeg}, 14, 14)">
+      <polygon points="14,2 18,10 18,22 10,22 10,10" fill="${colorCss}" stroke="#000" stroke-width="1.2"/>
+      <polygon points="14,2 18,10 10,10" fill="${colorCss}" stroke="#000" stroke-width="0.8"/>
+    </g>
+  </svg>`;
+  return `data:image/svg+xml;base64,${btoa(svg)}`;
+}
+
 const CESIUM_TOKEN =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJlYWEzYTYzMi1iYTMyLTQ5MjctYmEwMy05NGY1ZmQ5NGY0NzQiLCJpZCI6NDEzNTkzLCJpYXQiOjE3NzUyODI2Mjl9._sdtsqjhWpRKOwWKY7gMjh4fohPNRpz_WtaoTdgOHC4";
 
 const CESIUM_VERSION = "1.127";
 const CESIUM_CDN = `https://cesium.com/downloads/cesiumjs/releases/${CESIUM_VERSION}/Build/Cesium`;
 const POLL_INTERVAL_MS = 10_000;
+const VESSEL_POLL_MS = 30_000;   // vessels update every 30s (WebSocket bridge takes ~5s)
+const MAX_TRAIL_POINTS = 20;     // position history per vessel
 
 // ── NASA GIBS / EOX layer configs ────────────────────────────
 const YESTERDAY = new Date(Date.now() - 86400000).toISOString().split("T")[0];
@@ -204,6 +254,13 @@ export default function GlobeViewer() {
   const entitiesRef = useRef<Map<string, any>>(new Map());
   const aircraftDataRef = useRef<Map<string, AircraftData>>(new Map());
 
+  // Vessel tracking
+  const vesselEntitiesRef = useRef<Map<string, any>>(new Map());    // mmsi → billboard entity
+  const vesselTrailsRef = useRef<Map<string, any>>(new Map());      // mmsi → polyline entity
+  const vesselHistoryRef = useRef<Map<string, [number,number][]>>(new Map()); // mmsi → [[lon,lat],...]
+  const vesselDataRef = useRef<Map<string, VesselData>>(new Map());
+  const vesselPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const [mode, setMode] = useState<ImageryMode>("satellite");
   const [coords, setCoords] = useState<CoordState | null>(null);
   const [ready, setReady] = useState(false);
@@ -211,8 +268,12 @@ export default function GlobeViewer() {
   const [flightCount, setFlightCount] = useState(0);
   const [selectedAc, setSelectedAc] = useState<AircraftData | null>(null);
   const [showFlights, setShowFlights] = useState(true);
+  const [showVessels, setShowVessels] = useState(true);
+  const [vesselCount, setVesselCount] = useState(0);
+  const [selectedVessel, setSelectedVessel] = useState<VesselData | null>(null);
   const [lastUpdate, setLastUpdate] = useState<string>("");
   const showFlightsRef = useRef(true);
+  const showVesselsRef = useRef(true);
 
   // ── Fetch + update ────────────────────────────────────────────
   const updateFlights = useCallback(async () => {
@@ -293,6 +354,123 @@ export default function GlobeViewer() {
     }
   }, []);
 
+  // ── Fetch + update vessels ──────────────────────────────────────
+  const updateVessels = useCallback(async () => {
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed()) return;
+    const Cesium = (window as any).Cesium;
+
+    try {
+      const res = await fetch("/api/vessels");
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.error) return; // API key not set — silently skip
+      const vessels: VesselData[] = data.vessels ?? [];
+      const seen = new Set<string>();
+
+      for (const v of vessels) {
+        if (!v.mmsi || v.lat == null || v.lon == null) continue;
+        seen.add(v.mmsi);
+        vesselDataRef.current.set(v.mmsi, v);
+
+        // Update history trail
+        const history = vesselHistoryRef.current.get(v.mmsi) ?? [];
+        const last = history[history.length - 1];
+        if (!last || Math.abs(last[0] - v.lon) > 0.001 || Math.abs(last[1] - v.lat) > 0.001) {
+          history.push([v.lon, v.lat]);
+          if (history.length > MAX_TRAIL_POINTS) history.shift();
+          vesselHistoryRef.current.set(v.mmsi, history);
+        }
+
+        const color = shipColorCss(v.shipType);
+        const position = Cesium.Cartesian3.fromDegrees(v.lon, v.lat, 10); // 10m above sea
+        const show = showVesselsRef.current;
+
+        // Billboard entity
+        if (vesselEntitiesRef.current.has(v.mmsi)) {
+          const e = vesselEntitiesRef.current.get(v.mmsi)!;
+          e.position = position;
+          e.billboard.image = shipSvgUri(color, v.heading);
+          e.billboard.show = show;
+          e.label.show = show;
+        } else {
+          const CesiumColor = Cesium.Color.fromCssColorString(color);
+          const e = viewer.entities.add({
+            id: `vessel_${v.mmsi}`,
+            position,
+            billboard: {
+              image: shipSvgUri(color, v.heading),
+              width: 24, height: 24,
+              verticalOrigin: Cesium.VerticalOrigin.CENTER,
+              horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+              show,
+              sizeInMeters: false,
+              eyeOffset: new Cesium.Cartesian3(0, 0, -100), // render behind aircraft
+            },
+            label: {
+              text: v.name || v.mmsi,
+              font: "9px monospace",
+              fillColor: CesiumColor,
+              outlineColor: Cesium.Color.BLACK,
+              outlineWidth: 2,
+              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+              pixelOffset: new Cesium.Cartesian2(0, -18),
+              verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+              show,
+              translucencyByDistance: new Cesium.NearFarScalar(5e4, 1.0, 1.5e6, 0.0),
+            },
+          });
+          vesselEntitiesRef.current.set(v.mmsi, e);
+        }
+
+        // Polyline trail
+        const history2 = vesselHistoryRef.current.get(v.mmsi) ?? [];
+        if (history2.length >= 2) {
+          const positions = history2.map(([lon, lat]) =>
+            Cesium.Cartesian3.fromDegrees(lon, lat, 10)
+          );
+          const trailColor = Cesium.Color.fromCssColorString(color).withAlpha(0.5);
+
+          if (vesselTrailsRef.current.has(v.mmsi)) {
+            const trail = vesselTrailsRef.current.get(v.mmsi)!;
+            trail.polyline.positions = positions;
+            trail.polyline.show = show;
+          } else {
+            const trail = viewer.entities.add({
+              id: `trail_${v.mmsi}`,
+              polyline: {
+                positions,
+                width: 1.5,
+                material: new Cesium.PolylineGlowMaterialProperty({
+                  glowPower: 0.15,
+                  color: trailColor,
+                }),
+                show,
+                clampToGround: false,
+              },
+            });
+            vesselTrailsRef.current.set(v.mmsi, trail);
+          }
+        }
+      }
+
+      // Remove stale vessels
+      for (const [mmsi, entity] of vesselEntitiesRef.current) {
+        if (!seen.has(mmsi)) {
+          viewer.entities.remove(entity);
+          vesselEntitiesRef.current.delete(mmsi);
+          const trail = vesselTrailsRef.current.get(mmsi);
+          if (trail) { viewer.entities.remove(trail); vesselTrailsRef.current.delete(mmsi); }
+        }
+      }
+
+      setVesselCount(seen.size);
+      setSelectedVessel(prev => prev ? (vesselDataRef.current.get(prev.mmsi) ?? null) : null);
+    } catch (e) {
+      console.warn("[vessels] update error", e);
+    }
+  }, []);
+
   // ── Init ──────────────────────────────────────────────────────
   useEffect(() => {
     let active = true;
@@ -343,16 +521,27 @@ export default function GlobeViewer() {
         handler.setInputAction((e: any) => {
           const picked = viewer.scene.pick(e.position);
           if (Cesium.defined(picked) && picked.id?.id) {
-            const icao = picked.id.id;
-            const ac = aircraftDataRef.current.get(icao);
-            if (ac) setSelectedAc(ac);
+            const entityId: string = picked.id.id;
+            if (entityId.startsWith("vessel_")) {
+              const mmsi = entityId.replace("vessel_", "");
+              const vessel = vesselDataRef.current.get(mmsi);
+              if (vessel) { setSelectedVessel(vessel); setSelectedAc(null); }
+            } else if (!entityId.startsWith("trail_")) {
+              const ac = aircraftDataRef.current.get(entityId);
+              if (ac) { setSelectedAc(ac); setSelectedVessel(null); }
+            }
           } else {
             setSelectedAc(null);
+            setSelectedVessel(null);
           }
         }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
         await updateFlights();
         pollRef.current = setInterval(updateFlights, POLL_INTERVAL_MS);
+
+        // Start vessel tracking (fire-and-forget, fails silently without API key)
+        updateVessels();
+        vesselPollRef.current = setInterval(updateVessels, VESSEL_POLL_MS);
 
       } catch (err) {
         console.error(err);
@@ -364,10 +553,11 @@ export default function GlobeViewer() {
     return () => {
       active = false;
       if (pollRef.current) clearInterval(pollRef.current);
+      if (vesselPollRef.current) clearInterval(vesselPollRef.current);
       handlerRef.current?.destroy();
       if (viewerRef.current && !viewerRef.current.isDestroyed()) viewerRef.current.destroy();
     };
-  }, [updateFlights]);
+  }, [updateFlights, updateVessels]);
 
   const toggleFlights = useCallback(() => {
     const next = !showFlightsRef.current;
@@ -446,6 +636,27 @@ export default function GlobeViewer() {
     viewerRef.current.camera.flyTo({ destination: Cesium.Cartesian3.fromDegrees(-98.5, 39.5, 8_000_000), duration: 1.5 });
   }, []);
 
+  const toggleVessels = useCallback(() => {
+    const next = !showVesselsRef.current;
+    showVesselsRef.current = next;
+    setShowVessels(next);
+    for (const e of vesselEntitiesRef.current.values()) {
+      e.billboard.show = next; e.label.show = next;
+    }
+    for (const t of vesselTrailsRef.current.values()) {
+      t.polyline.show = next;
+    }
+  }, []);
+
+  const flyToVessel = useCallback(() => {
+    if (!selectedVessel || !viewerRef.current) return;
+    const Cesium = (window as any).Cesium;
+    viewerRef.current.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(selectedVessel.lon, selectedVessel.lat, 200_000),
+      duration: 2,
+    });
+  }, [selectedVessel]);
+
   const flyToAircraft = useCallback(() => {
     if (!selectedAc || !viewerRef.current) return;
     const Cesium = (window as any).Cesium;
@@ -501,14 +712,23 @@ export default function GlobeViewer() {
           <button className="ctrl-btn" onClick={flyHome}><HomeIcon />Reset</button>
           <div className="ctrl-divider" />
           <button className={`ctrl-btn${!showFlights?" active":""}`} onClick={toggleFlights}><PlaneIcon />{showFlights?"Hide":"Show"} Planes</button>
+          <div className="ctrl-divider" />
+          <button className={`ctrl-btn${!showVessels?" active":""}`} onClick={toggleVessels}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M2 20h20M5 20V10l7-7 7 7v10M9 20v-5h6v5"/>
+            </svg>
+            {showVessels?"Hide":"Show"} Ships
+          </button>
         </nav>
       )}
 
-      {/* Counter */}
+      {/* Counters */}
       {ready && flightCount > 0 && (
         <div className="flight-counter">
           <span className="counter-dot" />
           {flightCount} AIRCRAFT
+          {vesselCount > 0 && <span className="counter-sep">|</span>}
+          {vesselCount > 0 && <>{vesselCount} VESSELS</>}
           {lastUpdate && <span className="counter-time">{lastUpdate}</span>}
         </div>
       )}
@@ -596,6 +816,78 @@ export default function GlobeViewer() {
           </div>
         )}
       </div>
+
+      {/* ── Vessel Sidebar ───────────────────────────────────── */}
+      {selectedVessel && !selectedAc && (
+        <div className="mil-sidebar open">
+          <div className="mil-header">
+            <div className="mil-header-left">
+              <div className="mil-tag">AIS · {shipTypeLabel(selectedVessel.shipType)}</div>
+              <div className="mil-callsign" style={{ color: shipColorCss(selectedVessel.shipType) }}>
+                {selectedVessel.name || selectedVessel.mmsi}
+              </div>
+              {selectedVessel.callsign && <div className="mil-reg">{selectedVessel.callsign}</div>}
+            </div>
+            <button className="mil-close" onClick={() => setSelectedVessel(null)}><CloseIcon /></button>
+          </div>
+
+          <div className="mil-gauges">
+            <HeadingDial heading={Math.round(selectedVessel.heading)} />
+            {/* Speed gauge */}
+            <div className="hdg-dial">
+              <div style={{ fontSize: "1.8rem", fontWeight: 800, fontFamily: "JetBrains Mono", color: shipColorCss(selectedVessel.shipType), textShadow: `0 0 12px ${shipColorCss(selectedVessel.shipType)}` }}>
+                {selectedVessel.sog.toFixed(1)}
+              </div>
+              <div className="hdg-value">KTS SOG</div>
+            </div>
+          </div>
+
+          <div className="mil-grid">
+            <div className="mil-cell">
+              <div className="mil-label">MMSI</div>
+              <div className="mil-value">{selectedVessel.mmsi}</div>
+            </div>
+            <div className="mil-cell">
+              <div className="mil-label">COURSE</div>
+              <div className="mil-value">{Math.round(selectedVessel.cog)}°</div>
+            </div>
+            <div className="mil-cell mil-cell-wide">
+              <div className="mil-label">POSITION</div>
+              <div className="mil-value mil-mono">{selectedVessel.lat.toFixed(4)}° N &nbsp; {selectedVessel.lon.toFixed(4)}° E</div>
+            </div>
+            {selectedVessel.destination && (
+              <div className="mil-cell mil-cell-wide">
+                <div className="mil-label">DESTINATION</div>
+                <div className="mil-value">{selectedVessel.destination}</div>
+              </div>
+            )}
+            {selectedVessel.draught > 0 && (
+              <div className="mil-cell">
+                <div className="mil-label">DRAUGHT</div>
+                <div className="mil-value">{selectedVessel.draught.toFixed(1)} <span className="mil-unit">M</span></div>
+              </div>
+            )}
+            {selectedVessel.length > 0 && (
+              <div className="mil-cell">
+                <div className="mil-label">LENGTH</div>
+                <div className="mil-value">{selectedVessel.length} <span className="mil-unit">M</span></div>
+              </div>
+            )}
+          </div>
+
+          <button className="mil-flyto" style={{ borderColor: shipColorCss(selectedVessel.shipType), color: shipColorCss(selectedVessel.shipType) }} onClick={flyToVessel}>
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth={2}><path d="M22 12A10 10 0 1 1 12 2"/><path d="M22 2 11 13"/><path d="M22 2h-7M22 2v7"/></svg>
+            FLY TO VESSEL
+          </button>
+
+          <div className="mil-legend">
+            <span className="leg-dot" style={{background:"#ffa500"}} /> Cargo &nbsp;
+            <span className="leg-dot" style={{background:"#ff4444"}} /> Tanker &nbsp;
+            <span className="leg-dot" style={{background:"#44aaff"}} /> Passenger &nbsp;
+            <span className="leg-dot" style={{background:"#44ff88"}} /> Fishing
+          </div>
+        </div>
+      )}
 
       {/* Coords */}
       {coords && (
