@@ -1,19 +1,12 @@
 import { NextResponse } from "next/server";
 
 // Proxy flight data to avoid CORS.
-// Uses the public readsb feed from adsb.fi — completely free, no API key required,
-// works from server-side / Vercel, returns live ADS-B positions globally.
+// Uses airplanes.live — free, no API key, works from Vercel.
+// Format: { ac: [ { hex, flight, lat, lon, alt_baro, gs, track, ... } ] }
 
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-
-  // Bounding box params (optional) — default to continental US
-  const lat = searchParams.get("lat") ?? "39.5";
-  const lon = searchParams.get("lon") ?? "-98.5";
-  const dist = searchParams.get("dist") ?? "1500"; // nautical miles radius
-
-  // adsb.fi is a free, public, no-auth ADS-B aggregator with good uptime
-  const url = `https://opendata.adsb.fi/api/v2/lat/${lat}/lon/${lon}/dist/${dist}`;
+export async function GET() {
+  // Center on continental US, 1500nm radius covers the whole country
+  const url = "https://api.airplanes.live/v2/point/39.5/-98.5/1500";
 
   try {
     const res = await fetch(url, {
@@ -27,7 +20,7 @@ export async function GET(request: Request) {
 
     if (!res.ok) {
       return NextResponse.json(
-        { error: `adsb.fi returned ${res.status}` },
+        { error: `airplanes.live returned ${res.status}` },
         { status: res.status }
       );
     }
