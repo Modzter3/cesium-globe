@@ -132,56 +132,60 @@ export default function GlobeViewer() {
       const res = await fetch("/api/flights");
       if (!res.ok) return;
       const data = await res.json();
-      const states: any[][] = data.states ?? [];
+      // adsb.fi / readsb format: { ac: [ { hex, flight, lat, lon, alt_baro, gs, track, ... } ] }
+      const aircraft: any[] = data.ac ?? data.states ?? [];
 
       const seen = new Set<string>();
 
-      for (const s of states) {
-        const icao: string = s[0];
-        const callsign: string = (s[1] ?? "").trim() || icao;
-        const lon: number | null = s[5];
-        const lat: number | null = s[6];
-        const baroAlt: number | null = s[7];
-        const onGround: boolean = s[8];
-        const velocity: number | null = s[9];
-        const heading: number | null = s[10];
-        const country: string = s[2] ?? "";
+      for (const ac of aircraft) {
+        // Support both adsb.fi (object) and OpenSky (array) formats
+        const isArray = Array.isArray(ac);
+        const icao: string = isArray ? ac[0] : (ac.hex ?? "");
+        const callsign: string = isArray
+          ? ((ac[1] ?? "").trim() || icao)
+          : ((ac.flight ?? "").trim() || icao);
+        const lon: number | null = isArray ? ac[5] : ac.lon;
+        const lat: number | null = isArray ? ac[6] : ac.lat;
+        // alt_baro can be "ground" string in adsb.fi
+        const rawAlt = isArray ? ac[7] : ac.alt_baro;
+        const onGround: boolean = isArray ? ac[8] : (rawAlt === "ground" || ac.on_ground === true);
+        const altFt: number = (typeof rawAlt === "number") ? rawAlt : 3000;
+        const altM = altFt * 0.3048; // feet → meters
+        const velocity: number = isArray ? (ac[9] ?? 0) : (ac.gs ?? 0); // knots in adsb.fi
+        const heading: number = isArray ? (ac[10] ?? 0) : (ac.track ?? 0);
+        const country: string = isArray ? (ac[2] ?? "") : "";
 
         if (lon == null || lat == null || onGround) continue;
 
-        const altM = baroAlt ?? 1000;
-        const hdg = heading ?? 0;
         const color = altColor(Cesium, altM);
         const colorCss = altM < 3000 ? "#ffff00" : altM < 9000 ? "#00ffff" : "#cc88ff";
 
         seen.add(icao);
 
         const position = Cesium.Cartesian3.fromDegrees(lon, lat, altM);
-        const imgUri = showFlightsRef.current ? airplaneSvgUri(colorCss, hdg) : "";
 
         if (entitiesRef.current.has(icao)) {
           // Update existing entity
           const entity = entitiesRef.current.get(icao)!;
           entity.position = position;
-          entity.billboard.image = airplaneSvgUri(colorCss, hdg);
+          entity.billboard.image = airplaneSvgUri(colorCss, heading);
           entity.billboard.show = showFlightsRef.current;
           entity.label.show = showFlightsRef.current;
           entity.properties.altitude._value = altM;
-          entity.properties.velocity._value = velocity ?? 0;
-          entity.properties.heading._value = hdg;
+          entity.properties.velocity._value = velocity;
+          entity.properties.heading._value = heading;
         } else {
           // Create new entity
           const entity = viewer.entities.add({
             id: icao,
             position,
             billboard: {
-              image: airplaneSvgUri(colorCss, hdg),
+              image: airplaneSvgUri(colorCss, heading),
               width: 28,
               height: 28,
               verticalOrigin: Cesium.VerticalOrigin.CENTER,
               horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
               show: showFlightsRef.current,
-              // Always face camera (billboard is screen-space)
               sizeInMeters: false,
             },
             label: {
@@ -201,8 +205,8 @@ export default function GlobeViewer() {
               callsign,
               country,
               altitude: altM,
-              velocity: velocity ?? 0,
-              heading: hdg,
+              velocity,
+              heading,
             },
           });
           entitiesRef.current.set(icao, entity);

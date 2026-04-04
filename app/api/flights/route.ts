@@ -1,40 +1,33 @@
 import { NextResponse } from "next/server";
 
-// Proxy OpenSky Network API to avoid CORS issues in the browser.
-// Uses a bounding box to limit data to a manageable region.
-// Anonymous limit: 400 credits/day. Each request costs 1-4 credits
-// depending on area size. We default to a ~US-wide box (≈ 4 credits each).
-
-const OPENSKY_URL = "https://opensky-network.org/api/states/all";
-
-// Default bounding box: continental US + surrounding area
-const DEFAULT_BOX = {
-  lamin: 24,
-  lomin: -130,
-  lamax: 50,
-  lomax: -60,
-};
+// Proxy flight data to avoid CORS.
+// Uses the public readsb feed from adsb.fi — completely free, no API key required,
+// works from server-side / Vercel, returns live ADS-B positions globally.
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
 
-  const lamin = searchParams.get("lamin") ?? DEFAULT_BOX.lamin;
-  const lomin = searchParams.get("lomin") ?? DEFAULT_BOX.lomin;
-  const lamax = searchParams.get("lamax") ?? DEFAULT_BOX.lamax;
-  const lomax = searchParams.get("lomax") ?? DEFAULT_BOX.lomax;
+  // Bounding box params (optional) — default to continental US
+  const lat = searchParams.get("lat") ?? "39.5";
+  const lon = searchParams.get("lon") ?? "-98.5";
+  const dist = searchParams.get("dist") ?? "1500"; // nautical miles radius
 
-  const url = `${OPENSKY_URL}?lamin=${lamin}&lomin=${lomin}&lamax=${lamax}&lomax=${lomax}`;
+  // adsb.fi is a free, public, no-auth ADS-B aggregator with good uptime
+  const url = `https://opendata.adsb.fi/api/v2/lat/${lat}/lon/${lon}/dist/${dist}`;
 
   try {
     const res = await fetch(url, {
-      headers: { "Accept": "application/json" },
-      // Don't cache — we want fresh data every poll
+      headers: {
+        "Accept": "application/json",
+        "User-Agent": "cesium-globe/1.0",
+      },
       cache: "no-store",
+      signal: AbortSignal.timeout(8000),
     });
 
     if (!res.ok) {
       return NextResponse.json(
-        { error: `OpenSky returned ${res.status}` },
+        { error: `adsb.fi returned ${res.status}` },
         { status: res.status }
       );
     }
@@ -43,6 +36,6 @@ export async function GET(request: Request) {
     return NextResponse.json(data);
   } catch (err) {
     console.error("[flights] fetch error:", err);
-    return NextResponse.json({ error: "Failed to reach OpenSky" }, { status: 502 });
+    return NextResponse.json({ error: "Failed to reach flight data source" }, { status: 502 });
   }
 }
