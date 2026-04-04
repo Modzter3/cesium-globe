@@ -1,198 +1,319 @@
 @import "tailwindcss";
 
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
+* { box-sizing: border-box; margin: 0; padding: 0; }
 
-html,
-body {
-  height: 100%;
-  width: 100%;
+html, body {
+  height: 100%; width: 100%;
   overflow: hidden;
-  background: #0b0e14;
+  background: #030b03;
   font-family: "Inter", system-ui, sans-serif;
 }
 
-/* Cesium container fills the viewport */
-#cesiumContainer {
-  position: absolute;
-  inset: 0;
-}
+/* Cesium fills viewport */
+#cesiumContainer { position: absolute; inset: 0; }
 
-/* Hide the default Cesium credit bar — we show our own branding */
-.cesium-widget-credits {
-  display: none !important;
-}
+.cesium-widget-credits { display: none !important; }
 
-/* ── HUD overlay ─────────────────────────────────────────────── */
+/* ── HUD Header ─────────────────────────────────────────────── */
 .hud {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  pointer-events: none;
-  z-index: 10;
-  padding: 1.25rem 1.5rem;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  position: absolute; top: 0; left: 0; right: 0;
+  pointer-events: none; z-index: 10;
+  padding: 1.1rem 1.4rem;
+  display: flex; align-items: flex-start; justify-content: space-between;
 }
-
-.hud-logo {
-  pointer-events: auto;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
+.hud-logo { pointer-events: auto; display: flex; align-items: center; gap: 0.5rem; }
 .hud-title {
-  font-size: 1rem;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: #fff;
-  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.8);
-}
-
-.hud-subtitle {
-  font-size: 0.7rem;
-  color: rgba(255, 255, 255, 0.5);
-  letter-spacing: 0.08em;
+  font-size: 0.95rem; font-weight: 700;
+  letter-spacing: 0.04em; color: #00ff88;
+  text-shadow: 0 0 12px rgba(0,255,136,0.5);
   text-transform: uppercase;
 }
+.hud-subtitle {
+  font-size: 0.65rem; color: rgba(0,255,136,0.4);
+  letter-spacing: 0.12em; text-transform: uppercase;
+}
 
-/* ── Controls panel ──────────────────────────────────────────── */
+/* ── Controls bar ───────────────────────────────────────────── */
 .controls {
-  position: absolute;
-  bottom: 1.5rem;
-  left: 50%;
+  position: absolute; bottom: 1.4rem; left: 50%;
   transform: translateX(-50%);
-  pointer-events: auto;
-  z-index: 10;
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  background: rgba(11, 14, 20, 0.75);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 9999px;
-  padding: 0.5rem 0.75rem;
+  pointer-events: auto; z-index: 10;
+  display: flex; gap: 0.35rem; align-items: center;
+  background: rgba(3, 12, 3, 0.85);
+  border: 1px solid rgba(0,255,136,0.15);
+  border-radius: 4px;
+  padding: 0.45rem 0.7rem;
   backdrop-filter: blur(12px);
+  box-shadow: 0 0 20px rgba(0,255,0,0.05), inset 0 1px 0 rgba(0,255,136,0.08);
 }
-
 .ctrl-btn {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  font-size: 0.72rem;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.6);
-  background: transparent;
-  border: none;
-  border-radius: 9999px;
-  padding: 0.35rem 0.75rem;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  display: flex; align-items: center; gap: 0.3rem;
+  font-size: 0.65rem; font-weight: 600;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: rgba(0,255,136,0.5);
+  background: transparent; border: none;
+  border-radius: 3px; padding: 0.3rem 0.6rem;
+  cursor: pointer; transition: all 0.15s;
+  font-family: "JetBrains Mono", monospace;
   white-space: nowrap;
-  font-family: inherit;
 }
-
-.ctrl-btn:hover,
-.ctrl-btn.active {
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
+.ctrl-btn:hover, .ctrl-btn.active {
+  color: #00ff88;
+  background: rgba(0,255,136,0.08);
+  text-shadow: 0 0 8px rgba(0,255,136,0.6);
 }
-
-.ctrl-btn svg {
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-}
-
-.ctrl-divider {
-  width: 1px;
-  height: 16px;
-  background: rgba(255, 255, 255, 0.1);
-  flex-shrink: 0;
-}
+.ctrl-btn svg { width: 13px; height: 13px; flex-shrink: 0; }
+.ctrl-divider { width: 1px; height: 14px; background: rgba(0,255,136,0.1); flex-shrink: 0; }
 
 /* ── Flight counter ─────────────────────────────────────────── */
 .flight-counter {
-  position: absolute;
-  top: 1.25rem;
-  right: 1.5rem;
+  position: absolute; top: 1.1rem; right: 1.4rem;
   z-index: 10;
-  font-size: 0.72rem;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.7);
-  background: rgba(11, 14, 20, 0.7);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 9999px;
-  padding: 0.3rem 0.8rem;
+  display: flex; align-items: center; gap: 0.5rem;
+  font-size: 0.65rem; font-weight: 700;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: #00ff88;
+  background: rgba(3,12,3,0.8);
+  border: 1px solid rgba(0,255,136,0.2);
+  border-radius: 3px; padding: 0.3rem 0.75rem;
   backdrop-filter: blur(10px);
-  letter-spacing: 0.03em;
+  font-family: "JetBrains Mono", monospace;
+  text-shadow: 0 0 8px rgba(0,255,136,0.5);
+}
+.counter-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #00ff88;
+  box-shadow: 0 0 6px #00ff88;
+  animation: pulse 2s infinite;
+}
+.counter-time {
+  color: rgba(0,255,136,0.4);
+  margin-left: 0.4rem;
+  font-size: 0.6rem;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }
 
-/* ── Flight info card ────────────────────────────────────────── */
-.flight-card {
+/* ── Military Sidebar ───────────────────────────────────────── */
+.mil-sidebar {
   position: absolute;
-  top: 4.5rem;
-  right: 1.5rem;
+  top: 0; right: 0; bottom: 0;
+  width: 300px;
   z-index: 20;
-  min-width: 200px;
-  background: rgba(11, 14, 20, 0.88);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 12px;
-  padding: 1rem 1.1rem;
-  backdrop-filter: blur(16px);
-  color: #fff;
-  font-size: 0.78rem;
-  pointer-events: auto;
+  background: rgba(3, 8, 3, 0.95);
+  border-left: 1px solid rgba(0,255,136,0.2);
+  backdrop-filter: blur(20px);
+  transform: translateX(100%);
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  /* scanline overlay */
+  background-image: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.08) 2px,
+    rgba(0,0,0,0.08) 4px
+  );
+}
+.mil-sidebar.open { transform: translateX(0); }
+
+/* Top corner accent lines */
+.mil-sidebar::before {
+  content: "";
+  position: absolute; top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #00ff88, transparent);
+  opacity: 0.6;
 }
 
-.flight-card-close {
-  position: absolute;
-  top: 0.6rem;
-  right: 0.8rem;
-  cursor: pointer;
-  color: rgba(255,255,255,0.4);
-  font-size: 0.9rem;
-  line-height: 1;
+.mil-header {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  padding: 1.2rem 1.1rem 0.9rem;
+  border-bottom: 1px solid rgba(0,255,136,0.12);
+  flex-shrink: 0;
 }
-.flight-card-close:hover { color: #fff; }
-
-.flight-card-callsign {
-  font-size: 1.1rem;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  margin-bottom: 0.6rem;
-  color: #00ffff;
+.mil-header-left { display: flex; flex-direction: column; gap: 0.2rem; }
+.mil-tag {
+  font-size: 0.55rem; font-weight: 700;
+  letter-spacing: 0.2em; text-transform: uppercase;
+  color: #00ff88; opacity: 0.6;
   font-family: "JetBrains Mono", monospace;
 }
-
-.flight-card-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.2rem 0;
-  border-bottom: 1px solid rgba(255,255,255,0.05);
-  color: rgba(255,255,255,0.75);
+.mil-callsign {
+  font-size: 1.6rem; font-weight: 800;
+  letter-spacing: 0.06em;
+  color: #00ff88;
+  text-shadow: 0 0 20px rgba(0,255,136,0.4);
+  font-family: "JetBrains Mono", monospace;
+  line-height: 1;
 }
-.flight-card-row:last-child { border-bottom: none; }
-.flight-card-row span:first-child { color: rgba(255,255,255,0.4); }
+.mil-reg {
+  font-size: 0.72rem; color: rgba(0,255,136,0.5);
+  font-family: "JetBrains Mono", monospace;
+  letter-spacing: 0.1em;
+}
+.mil-close {
+  background: transparent; border: 1px solid rgba(0,255,136,0.2);
+  border-radius: 3px; padding: 0.35rem;
+  cursor: pointer; color: rgba(0,255,136,0.5);
+  transition: all 0.15s; flex-shrink: 0;
+}
+.mil-close:hover { color: #00ff88; border-color: rgba(0,255,136,0.5); background: rgba(0,255,136,0.08); }
+.mil-close svg { width: 14px; height: 14px; display: block; }
 
-/* ── Coordinate readout ──────────────────────────────────────── */
-.coords {
-  position: absolute;
-  bottom: 1.5rem;
-  right: 1.5rem;
-  z-index: 10;
-  font-size: 0.68rem;
-  color: rgba(255, 255, 255, 0.4);
-  font-variant-numeric: tabular-nums;
+/* Emergency */
+.mil-emergency {
+  background: rgba(255,50,50,0.15);
+  border-top: 1px solid rgba(255,50,50,0.4);
+  border-bottom: 1px solid rgba(255,50,50,0.4);
+  color: #ff5555;
+  font-size: 0.7rem; font-weight: 700;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 0.5rem 1.1rem;
+  font-family: "JetBrains Mono", monospace;
+  animation: blink 1s step-end infinite;
+}
+@keyframes blink { 50% { opacity: 0.4; } }
+
+/* Gauges row */
+.mil-gauges {
+  display: flex; align-items: center; justify-content: space-around;
+  padding: 1rem 1.1rem 0.8rem;
+  border-bottom: 1px solid rgba(0,255,136,0.08);
+  flex-shrink: 0;
+}
+
+/* Heading dial */
+.hdg-dial { display: flex; flex-direction: column; align-items: center; gap: 0.3rem; }
+.hdg-value {
+  font-size: 0.7rem; font-weight: 700;
+  color: #00ff88; font-family: "JetBrains Mono", monospace;
+  letter-spacing: 0.08em;
+}
+
+/* Altitude bar */
+.alt-bar-wrap { display: flex; flex-direction: column; align-items: center; gap: 0.4rem; }
+.alt-bar-track {
+  width: 20px; height: 80px;
+  background: rgba(0,255,136,0.05);
+  border: 1px solid rgba(0,255,136,0.2);
+  border-radius: 2px;
+  display: flex; flex-direction: column; justify-content: flex-end;
+  overflow: hidden;
+}
+.alt-bar-fill {
+  width: 100%; border-radius: 1px;
+  transition: height 0.5s ease, background 0.5s ease;
+}
+.alt-bar-labels {
+  display: flex; flex-direction: column; align-items: center; gap: 0.15rem;
+  font-family: "JetBrains Mono", monospace; font-size: 0.6rem;
+  color: rgba(0,255,136,0.5);
+}
+.alt-bar-labels span:first-child { font-size: 0.72rem; font-weight: 700; }
+
+/* Data grid */
+.mil-grid {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: rgba(0,255,136,0.06);
+  border-top: 1px solid rgba(0,255,136,0.08);
+  flex: 1; overflow-y: auto;
+}
+.mil-cell {
+  background: rgba(3,8,3,0.95);
+  padding: 0.7rem 0.85rem;
+  display: flex; flex-direction: column; gap: 0.25rem;
+}
+.mil-cell-wide { grid-column: 1 / -1; }
+
+.mil-label {
+  font-size: 0.55rem; font-weight: 700;
+  letter-spacing: 0.15em; text-transform: uppercase;
+  color: rgba(0,255,136,0.35);
+  font-family: "JetBrains Mono", monospace;
+}
+.mil-value {
+  font-size: 0.82rem; font-weight: 600;
+  color: #c8f0c8;
+  font-family: "JetBrains Mono", monospace;
   letter-spacing: 0.04em;
-  font-family: "JetBrains Mono", "Fira Code", monospace;
-  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
-  line-height: 1.6;
-  text-align: right;
 }
+.mil-mono { font-size: 0.72rem; }
+.mil-unit { font-size: 0.6rem; color: rgba(0,255,136,0.4); font-weight: 400; }
+.mil-climb { color: #00ff88; }
+.mil-descend { color: #ff8844; }
+
+/* Fly-to button */
+.mil-flyto {
+  display: flex; align-items: center; justify-content: center; gap: 0.5rem;
+  margin: 0.8rem 1rem;
+  padding: 0.6rem;
+  background: transparent;
+  border: 1px solid rgba(0,255,136,0.3);
+  border-radius: 3px;
+  color: #00ff88; font-size: 0.65rem; font-weight: 700;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  font-family: "JetBrains Mono", monospace;
+  cursor: pointer;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+.mil-flyto:hover {
+  background: rgba(0,255,136,0.1);
+  border-color: #00ff88;
+  box-shadow: 0 0 12px rgba(0,255,136,0.2);
+}
+.mil-flyto svg { width: 13px; height: 13px; }
+
+/* Legend */
+.mil-legend {
+  padding: 0.5rem 1rem 0.9rem;
+  font-size: 0.58rem; letter-spacing: 0.06em;
+  color: rgba(0,255,136,0.3);
+  display: flex; align-items: center; flex-wrap: wrap;
+  font-family: "JetBrains Mono", monospace;
+  flex-shrink: 0;
+}
+.leg-dot {
+  display: inline-block; width: 7px; height: 7px;
+  border-radius: 50%; margin-right: 3px;
+}
+
+/* Empty state */
+.mil-empty {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 0.75rem;
+  color: rgba(0,255,136,0.2);
+}
+.mil-empty svg { width: 40px; height: 40px; }
+.mil-empty p {
+  font-size: 0.7rem; font-weight: 700;
+  letter-spacing: 0.15em; text-transform: uppercase;
+  font-family: "JetBrains Mono", monospace;
+}
+.mil-empty-sub {
+  font-size: 0.6rem !important;
+  letter-spacing: 0.08em !important;
+  opacity: 0.6;
+}
+
+/* ── Coordinate readout ─────────────────────────────────────── */
+.coords {
+  position: absolute; bottom: 1.4rem; right: 1.4rem;
+  z-index: 10;
+  font-size: 0.62rem; color: rgba(0,255,136,0.3);
+  font-family: "JetBrains Mono", monospace;
+  letter-spacing: 0.06em; line-height: 1.6;
+  text-align: right;
+  text-shadow: 0 0 6px rgba(0,255,0,0.3);
+}
+
+/* Scrollbar styling for sidebar */
+.mil-grid::-webkit-scrollbar { width: 3px; }
+.mil-grid::-webkit-scrollbar-track { background: transparent; }
+.mil-grid::-webkit-scrollbar-thumb { background: rgba(0,255,136,0.2); border-radius: 2px; }
