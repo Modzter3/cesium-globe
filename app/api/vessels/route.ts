@@ -1,79 +1,72 @@
-import { NextResponse } from "next/server";
-import { WebSocket } from "ws";
+// Edge runtime — no cold start, native WebSocket, 25s limit on free plan
+export const runtime = "edge";
 
-// AIS vessel positions via aisstream.io (free, requires API key).
-// We open a WebSocket, collect positions for up to 5 seconds, then close and return.
-// This turns the WebSocket stream into a REST endpoint Cesium can poll.
-
-const AISSTREAM_KEY = process.env.AISSTREAM_API_KEY ?? "";
-const COLLECT_MS = 5000; // collect for 5s per request
-const MAX_VESSELS = 2000;
-
-// Bounding boxes covering major shipping lanes globally
-const BOUNDING_BOXES = [
-  [[-90, -180], [90, 180]], // whole world
-];
+const AISSTREAM_URL = "wss://stream.aisstream.io/v0/stream";
+const COLLECT_MS = 6000;
+const MAX_VESSELS = 1500;
 
 export async function GET() {
-  if (!AISSTREAM_KEY) {
-    return NextResponse.json(
-      { error: "AISSTREAM_API_KEY not set. Add it to Vercel environment variables." },
+  const key = process.env.AISSTREAM_API_KEY;
+  if (!key) {
+    return Response.json(
+      { error: "AISSTREAM_API_KEY not configured in environment variables." },
       { status: 503 }
     );
   }
 
   try {
-    const vessels = await collectVessels();
-    return NextResponse.json({ vessels, total: vessels.length });
-  } catch (err) {
-    console.error("[vessels] error:", err);
-    return NextResponse.json({ error: "Failed to fetch vessel data" }, { status: 502 });
+    const vessels = await collectVessels(key);
+    return Response.json({ vessels, total: vessels.length });
+  } catch (err: any) {
+    console.error("[vessels]", err?.message ?? err);
+    return Response.json({ error: "Failed to collect vessel data" }, { status: 502 });
   }
 }
 
-interface VesselPosition {
+interface Vessel {
   mmsi: string;
   name: string;
+  callsign: string;
   lat: number;
   lon: number;
-  sog: number;       // speed over ground (knots)
-  cog: number;       // course over ground (degrees)
+  sog: number;
+  cog: number;
   heading: number;
   shipType: number;
   destination: string;
   draught: number;
   length: number;
   width: number;
-  callsign: string;
 }
 
-function collectVessels(): Promise<VesselPosition[]> {
+function collectVessels(apiKey: string): Promise<Vessel[]> {
   return new Promise((resolve, reject) => {
-    const seen = new Map<string, VesselPosition>();
+    const seen = new Map<string, Vessel>();
     let settled = false;
 
-    const done = () => {
+    const finish = () => {
       if (settled) return;
       settled = true;
       try { ws.close(); } catch {}
       resolve(Array.from(seen.values()));
     };
 
-    const ws = new WebSocket("wss://stream.aisstream.io/v0/stream");
-    const timer = setTimeout(done, COLLECT_MS);
+    const timer = setTimeout(finish, COLLECT_MS);
 
-    ws.on("open", () => {
+    const ws = new WebSocket(AISSTREAM_URL);
+
+    ws.addEventListener("open", () => {
       ws.send(JSON.stringify({
-        APIKey: AISSTREAM_KEY,
-        BoundingBoxes: BOUNDING_BOXES,
-        FilterMessageTypes: ["PositionReport", "ShipStaticData", "StandardClassBPositionReport"],
+        APIKey: apiKey,
+        BoundingBoxes: [[[-90, -180], [90, 180]]],
+        FilterMessageTypes: ["PositionReport", "StandardClassBPositionReport", "ShipStaticData"],
       }));
     });
 
-    ws.on("message", (raw: Buffer) => {
+    ws.addEventListener("message", (event: MessageEvent) => {
       if (settled) return;
       try {
-        const msg = JSON.parse(raw.toString());
+        const msg = JSON.parse(event.data as string);
         const meta = msg.MetaData ?? {};
         const mmsi = String(meta.MMSI ?? "");
         if (!mmsi) return;
@@ -84,13 +77,13 @@ function collectVessels(): Promise<VesselPosition[]> {
         if (pr) {
           const lat = pr.Latitude ?? meta.latitude_deg;
           const lon = pr.Longitude ?? meta.longitude_deg;
-          if (lat == null || lon == null) return;
-          if (lat === 0 && lon === 0) return;
+          if (lat == null || lon == null || (lat === 0 && lon === 0)) return;
 
-          const existing = seen.get(mmsi) ?? {} as Partial<VesselPosition>;
+          const existing = seen.get(mmsi) ?? {} as Partial<Vessel>;
           seen.set(mmsi, {
             mmsi,
             name: (meta.ShipName ?? existing.name ?? "").trim(),
+            callsign: existing.callsign ?? "",
             lat,
             lon,
             sog: pr.Sog ?? existing.sog ?? 0,
@@ -101,7 +94,6 @@ function collectVessels(): Promise<VesselPosition[]> {
             draught: existing.draught ?? 0,
             length: existing.length ?? 0,
             width: existing.width ?? 0,
-            callsign: existing.callsign ?? "",
           });
         }
 
@@ -112,24 +104,28 @@ function collectVessels(): Promise<VesselPosition[]> {
             existing.shipType = sd.Type ?? existing.shipType;
             existing.destination = (sd.Destination ?? existing.destination ?? "").trim();
             existing.draught = sd.Draught ?? existing.draught;
-            existing.length = sd.Dimension?.A + sd.Dimension?.B || existing.length;
-            existing.width = sd.Dimension?.C + sd.Dimension?.D || existing.width;
             existing.callsign = (sd.CallSign ?? existing.callsign ?? "").trim();
+            const dim = sd.Dimension ?? {};
+            existing.length = ((dim.A ?? 0) + (dim.B ?? 0)) || existing.length;
+            existing.width = ((dim.C ?? 0) + (dim.D ?? 0)) || existing.width;
           }
         }
 
-        if (seen.size >= MAX_VESSELS) done();
+        if (seen.size >= MAX_VESSELS) {
+          clearTimeout(timer);
+          finish();
+        }
       } catch {}
     });
 
-    ws.on("error", (err) => {
+    ws.addEventListener("error", () => {
       clearTimeout(timer);
-      if (!settled) { settled = true; reject(err); }
+      if (!settled) finish(); // return whatever we have
     });
 
-    ws.on("close", () => {
+    ws.addEventListener("close", () => {
       clearTimeout(timer);
-      done();
+      finish();
     });
   });
 }
