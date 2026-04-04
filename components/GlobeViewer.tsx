@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 
-type ImageryMode = "satellite" | "osm" | "dark";
+type ImageryMode = "satellite" | "osm" | "dark" | "viirs" | "sentinel2" | "modis";
 
 interface CoordState {
   lat: string;
@@ -35,6 +35,9 @@ const CESIUM_VERSION = "1.127";
 const CESIUM_CDN = `https://cesium.com/downloads/cesiumjs/releases/${CESIUM_VERSION}/Build/Cesium`;
 const POLL_INTERVAL_MS = 10_000;
 
+// ── NASA GIBS / EOX layer configs ────────────────────────────
+const YESTERDAY = new Date(Date.now() - 86400000).toISOString().split("T")[0];
+
 // ── SVG Icons ─────────────────────────────────────────────────
 const SatelliteIcon = () => (
   <svg viewBox="0 0 24 24" aria-hidden fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -59,6 +62,13 @@ const HomeIcon = () => (
 const PlaneIcon = () => (
   <svg viewBox="0 0 24 24" aria-hidden fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
     <path d="M17.8 19.2 16 11l3.5-3.5C21 6 21 4 19 2c-2-2-4-2-5.5-.5L10 5 1.8 6.2c-.5.1-.7.6-.4 1L4 10l2 2-2 2-2.5.4c-.4.1-.6.6-.3.9L4 18l2 2 .4-2.5L9 15l2 2 3 2c.4.3.9.1 1-.4z" />
+  </svg>
+);
+const LayersIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <polygon points="12 2 2 7 12 12 22 7 12 2" />
+    <polyline points="2 17 12 22 22 17" />
+    <polyline points="2 12 12 17 22 12" />
   </svg>
 );
 const CloseIcon = () => (
@@ -375,12 +385,58 @@ export default function GlobeViewer() {
     const Cesium = (window as any).Cesium;
     const layers = viewerRef.current.scene.imageryLayers;
     layers.removeAll();
+
     if (newMode === "satellite") {
+      // Bing Aerial via Cesium Ion
       layers.add(Cesium.ImageryLayer.fromProviderAsync(Cesium.IonImageryProvider.fromAssetId(2)));
+
     } else if (newMode === "osm") {
       layers.add(new Cesium.ImageryLayer(new Cesium.OpenStreetMapImageryProvider({ url: "https://tile.openstreetmap.org/" })));
-    } else {
+
+    } else if (newMode === "dark") {
       layers.add(Cesium.ImageryLayer.fromProviderAsync(Cesium.IonImageryProvider.fromAssetId(3812)));
+
+    } else if (newMode === "sentinel2") {
+      // Sentinel-2 Cloudless 2023 mosaic from EOX — free, no API key
+      layers.add(new Cesium.ImageryLayer(
+        new Cesium.WebMapTileServiceImageryProvider({
+          url: "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2023_3857/default/g/{TileMatrix}/{TileRow}/{TileCol}.jpg",
+          layer: "s2cloudless-2023_3857",
+          style: "default",
+          format: "image/jpeg",
+          tileMatrixSetID: "g",
+          maximumLevel: 14,
+          credit: "Sentinel-2 cloudless – https://s2maps.eu by EOX IT Services GmbH",
+        })
+      ));
+
+    } else if (newMode === "viirs") {
+      // VIIRS SNPP Near-Daily True Color from NASA GIBS — free, no API key
+      layers.add(new Cesium.ImageryLayer(
+        new Cesium.WebMapTileServiceImageryProvider({
+          url: "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/" + YESTERDAY + "/GoogleMapsCompatible_Level9/{TileMatrix}/{TileRow}/{TileCol}.jpg",
+          layer: "VIIRS_SNPP_CorrectedReflectance_TrueColor",
+          style: "default",
+          format: "image/jpeg",
+          tileMatrixSetID: "GoogleMapsCompatible_Level9",
+          maximumLevel: 9,
+          credit: "NASA GIBS – VIIRS SNPP True Color",
+        })
+      ));
+
+    } else if (newMode === "modis") {
+      // MODIS Terra Daily True Color from NASA GIBS — free, no API key
+      layers.add(new Cesium.ImageryLayer(
+        new Cesium.WebMapTileServiceImageryProvider({
+          url: "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/" + YESTERDAY + "/GoogleMapsCompatible_Level9/{TileMatrix}/{TileRow}/{TileCol}.jpg",
+          layer: "MODIS_Terra_CorrectedReflectance_TrueColor",
+          style: "default",
+          format: "image/jpeg",
+          tileMatrixSetID: "GoogleMapsCompatible_Level9",
+          maximumLevel: 9,
+          credit: "NASA GIBS – MODIS Terra True Color",
+        })
+      ));
     }
   }, [mode]);
 
@@ -430,7 +486,13 @@ export default function GlobeViewer() {
       {/* Controls */}
       {ready && (
         <nav className="controls">
-          <button className={`ctrl-btn${mode==="satellite"?" active":""}`} onClick={() => switchImagery("satellite")}><SatelliteIcon />Satellite</button>
+          <button className={`ctrl-btn${mode==="satellite"?" active":""}`} onClick={() => switchImagery("satellite")}><SatelliteIcon />Bing</button>
+          <div className="ctrl-divider" />
+          <button className={`ctrl-btn${mode==="sentinel2"?" active":""}`} onClick={() => switchImagery("sentinel2")}><LayersIcon />Sentinel-2</button>
+          <div className="ctrl-divider" />
+          <button className={`ctrl-btn${mode==="viirs"?" active":""}`} onClick={() => switchImagery("viirs")}><LayersIcon />VIIRS</button>
+          <div className="ctrl-divider" />
+          <button className={`ctrl-btn${mode==="modis"?" active":""}`} onClick={() => switchImagery("modis")}><LayersIcon />MODIS</button>
           <div className="ctrl-divider" />
           <button className={`ctrl-btn${mode==="osm"?" active":""}`} onClick={() => switchImagery("osm")}><MapIcon />Streets</button>
           <div className="ctrl-divider" />
