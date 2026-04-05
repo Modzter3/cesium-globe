@@ -1,8 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { useAircraftLayer } from "@/hooks/useAircraftLayer";
 import { useMockVesselLayer } from "@/hooks/useMockVesselLayer";
+import { altColorCss } from "@/lib/aircraftStyle";
+import { airportLabel } from "@/lib/airportLabel";
 import { shipColorCss, shipTypeLabel } from "@/lib/vesselBillboard";
+import type { AircraftData } from "@/types/aircraft";
+import type { FlightAwareFlightDetail, FlightAwareFlightResponse } from "@/types/flightAware";
 import type { VesselData } from "@/types/vessel";
 
 type ImageryMode = "satellite" | "osm" | "dark" | "viirs" | "sentinel2" | "modis";
@@ -13,31 +18,262 @@ interface CoordState {
   alt: string;
 }
 
-interface AircraftData {
-  icao: string;
-  callsign: string;
-  registration: string;
-  type: string;
-  typeDesc: string;
-  operator: string;
-  altFt: number;
-  altM: number;
-  speedKts: number;
-  heading: number;
-  verticalRate: number; // ft/min
-  squawk: string;
-  lat: number;
-  lon: number;
-  emergency: string;
-}
-
 const CESIUM_TOKEN =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJlYWEzYTYzMi1iYTMyLTQ5MjctYmEwMy05NGY1ZmQ5NGY0NzQiLCJpZCI6NDEzNTkzLCJpYXQiOjE3NzUyODI2Mjl9._sdtsqjhWpRKOwWKY7gMjh4fohPNRpz_WtaoTdgOHC4";
 
 const CESIUM_VERSION = "1.127";
 const CESIUM_CDN = `https://cesium.com/downloads/cesiumjs/releases/${CESIUM_VERSION}/Build/Cesium`;
-const POLL_INTERVAL_MS = 10_000;
+const AIRCRAFT_POLL_MS = 10_000;
 const MOCK_VESSEL_TICK_MS = 2000;
+/** Straight-line projection along reported heading for “where it’s headed”. */
+const AIRCRAFT_LOOKAHEAD_MINUTES = 3;
+
+const FA_ERROR_HINT: Record<string, string> = {
+  missing_api_key: "Set FLIGHTAWARE_API_KEY in .env.local and restart the dev server.",
+  flightaware_auth: "FlightAware rejected this API key (401/403). Verify it in your AeroAPI portal.",
+  no_matching_flight: "No FlightAware itinerary matched this callsign or tail number.",
+  callsign_or_registration_required: "Need a callsign or tail number to query FlightAware.",
+  flightaware_fetch_failed: "FlightAware request failed (network or timeout).",
+};
+
+/** Format an ISO timestamp into local date + time strings for a given IANA timezone. */
+function formatInTz(iso: string | null | undefined, tz: string | null | undefined) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  const zone = tz || "UTC";
+  try {
+    const dp = new Intl.DateTimeFormat("en-US", {
+      weekday: "long", month: "short", day: "2-digit", year: "numeric", timeZone: zone,
+    }).formatToParts(d);
+    const weekday = dp.find(p => p.type === "weekday")?.value ?? "";
+    const month   = dp.find(p => p.type === "month")?.value ?? "";
+    const day     = dp.find(p => p.type === "day")?.value ?? "";
+    const year    = dp.find(p => p.type === "year")?.value ?? "";
+
+    const tp = new Intl.DateTimeFormat("en-US", {
+      hour: "numeric", minute: "2-digit", hour12: true,
+      timeZone: zone, timeZoneName: "short",
+    }).formatToParts(d);
+    const hour   = tp.find(p => p.type === "hour")?.value ?? "";
+    const minute = tp.find(p => p.type === "minute")?.value ?? "";
+    const period = tp.find(p => p.type === "dayPeriod")?.value ?? "";
+    const tzName = tp.find(p => p.type === "timeZoneName")?.value ?? "";
+
+    return {
+      dayLine:  `${weekday} ${day}-${month}-${year}`,
+      timeLine: `${hour}:${minute}${period}${tzName ? ` ${tzName}` : ""}`,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function fmtDelay(sec: number | null | undefined): string | null {
+  if (sec == null || !Number.isFinite(sec)) return null;
+  const mins = Math.round(Math.abs(sec) / 60);
+  if (mins === 0) return "On time";
+  return `(${mins} minute${mins !== 1 ? "s" : ""} ${sec < 0 ? "early" : "late"})`;
+}
+
+function fmtDuration(ms: number): string {
+  const totalMins = Math.max(0, Math.round(ms / 60000));
+  const h = Math.floor(totalMins / 60);
+  const m = totalMins % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+function fmtMiles(mi: number): string {
+  return mi.toLocaleString("en-US", { maximumFractionDigits: 0 }) + " mi";
+}
+
+function FlightAwareCard({
+  detail,
+  faError,
+  loading,
+  callsign,
+}: {
+  detail: FlightAwareFlightDetail | null;
+  faError: string | null;
+  loading: boolean;
+  callsign: string;
+}) {
+  const borderStyle = "1px solid rgba(0,255,65,0.18)";
+  const wrap: React.CSSProperties = { marginTop: 6, paddingTop: 12, borderTop: borderStyle, color: "#c8f0c8" };
+
+  if (loading) {
+    return (
+      <div style={wrap}>
+        <p style={{ opacity: 0.5, fontSize: "0.78rem", margin: 0 }}>Loading FlightAware…</p>
+      </div>
+    );
+  }
+  if (faError) {
+    return (
+      <div style={wrap}>
+        <div style={{ fontSize: "0.74rem", color: "#fbbf24", padding: "8px 10px", background: "rgba(251,191,36,0.08)", borderRadius: 4, lineHeight: 1.45 }}>
+          {FA_ERROR_HINT[faError] ?? `FlightAware: ${faError}`}
+        </div>
+      </div>
+    );
+  }
+  if (!detail) return null;
+
+  const origin = detail.origin;
+  const dest   = detail.destination;
+
+  const depTime = detail.actualOut ?? detail.estimatedOut ?? detail.scheduledOut;
+  const arrTime = detail.actualIn  ?? detail.estimatedIn  ?? detail.scheduledIn;
+  const depFmt  = formatInTz(depTime, origin?.timezone);
+  const arrFmt  = formatInTz(arrTime, dest?.timezone);
+  const depDelay = fmtDelay(detail.departureDelaySec);
+  const arrDelay = fmtDelay(detail.arrivalDelaySec);
+
+  const now       = Date.now();
+  const schedOut  = detail.scheduledOut ? new Date(detail.scheduledOut).getTime() : null;
+  const schedIn   = detail.scheduledIn  ? new Date(detail.scheduledIn).getTime()  : null;
+  const actualOff = detail.actualOff    ? new Date(detail.actualOff).getTime()    : null;
+  const estOn     = detail.estimatedOn  ? new Date(detail.estimatedOn).getTime()  : null;
+  const totalMs     = schedOut && schedIn ? schedIn - schedOut : null;
+  const elapsedMs   = actualOff ? now - actualOff : null;
+  const remainingMs = estOn ? estOn - now : null;
+
+  const totalMi   = detail.routeDistance;
+  const progress  = detail.progressPercent;
+  const milesFlown = totalMi != null && progress != null ? Math.round(totalMi * progress / 100) : null;
+  const milesToGo  = totalMi != null && milesFlown != null ? Math.round(totalMi - milesFlown) : null;
+
+  const linkIdent  = detail.identIcao ?? detail.ident ?? callsign;
+  const schedIdent = detail.identIata ?? detail.ident ?? callsign;
+
+  const subLabel: React.CSSProperties = { fontSize: "0.68rem", opacity: 0.45, marginBottom: 2, letterSpacing: "0.06em" };
+  const mono: React.CSSProperties     = { fontFamily: "JetBrains Mono, monospace" };
+  const sep: React.CSSProperties      = { borderTop: borderStyle, paddingTop: 10, marginBottom: 10 };
+
+  return (
+    <div style={wrap}>
+
+      {/* ── Origin → Destination ── */}
+      {(origin || dest) && (
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 6, marginBottom: 14 }}>
+          {origin && (
+            <div style={{ flex: 1 }}>
+              <div style={{ ...mono, fontSize: "2rem", fontWeight: 800, color: "#00ff41", lineHeight: 1, letterSpacing: 1 }}>
+                {origin.code}
+              </div>
+              <div style={{ fontSize: "0.72rem", opacity: 0.65, marginTop: 3, lineHeight: 1.35 }}>
+                {[origin.city, origin.country].filter(Boolean).join(", ")}
+              </div>
+            </div>
+          )}
+          {origin && dest && (
+            <div style={{ opacity: 0.35, alignSelf: "center", fontSize: "1rem", padding: "0 2px" }}>→</div>
+          )}
+          {dest && (
+            <div style={{ flex: 1, textAlign: "right" }}>
+              <div style={{ ...mono, fontSize: "2rem", fontWeight: 800, color: "#00ff41", lineHeight: 1, letterSpacing: 1 }}>
+                {dest.code}
+              </div>
+              <div style={{ fontSize: "0.72rem", opacity: 0.65, marginTop: 3, lineHeight: 1.35 }}>
+                {[dest.city, dest.country].filter(Boolean).join(", ")}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Gate / Terminal / Airport names ── */}
+      {(detail.gateOrigin || origin?.name || detail.terminalDestination || dest?.name) && (
+        <div style={{ fontSize: "0.78rem", lineHeight: 1.75, marginBottom: 12 }}>
+          {(detail.gateOrigin || origin?.name) && (
+            <div>
+              {detail.gateOrigin && <div>left Gate {detail.gateOrigin}</div>}
+              {origin?.name && (
+                <div style={{ opacity: 0.6 }}>
+                  {origin.name}{origin.code ? ` — ${origin.code}` : ""}
+                </div>
+              )}
+            </div>
+          )}
+          {(detail.terminalDestination || dest?.name) && (
+            <div style={{ marginTop: detail.gateOrigin || origin?.name ? 6 : 0 }}>
+              {detail.terminalDestination && <div>arriving at Terminal {detail.terminalDestination}</div>}
+              {dest?.name && (
+                <div style={{ opacity: 0.6 }}>
+                  {dest.name}{dest.code ? ` — ${dest.code}` : ""}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Departure ── */}
+      {depFmt && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={subLabel}>DEPARTED</div>
+          <div style={{ ...mono, fontSize: "0.82rem" }}>{depFmt.dayLine}</div>
+          <div style={{ fontSize: "0.82rem" }}>
+            {depFmt.timeLine}
+            {depDelay && (
+              <span style={{ marginLeft: 7, opacity: 0.6, fontSize: "0.75rem" }}>{depDelay}</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Arrival ── */}
+      {arrFmt && (
+        <div style={{ marginBottom: 14 }}>
+          <div style={subLabel}>{detail.actualIn ? "ARRIVED" : "EST. ARRIVAL"}</div>
+          <div style={{ ...mono, fontSize: "0.82rem" }}>{arrFmt.dayLine}</div>
+          <div style={{ fontSize: "0.82rem" }}>
+            {arrFmt.timeLine}
+            {arrDelay && (
+              <span style={{ marginLeft: 7, opacity: 0.6, fontSize: "0.75rem" }}>{arrDelay}</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Time progress ── */}
+      {(totalMs || elapsedMs || remainingMs) && (
+        <div style={{ ...sep, fontSize: "0.78rem", lineHeight: 1.8, marginBottom: 0 }}>
+          {elapsedMs != null && elapsedMs > 0 && <div>{fmtDuration(elapsedMs)} elapsed</div>}
+          {totalMs   != null && totalMs > 0   && <div>{fmtDuration(totalMs)} total travel time</div>}
+          {remainingMs != null && remainingMs > 0 && <div>{fmtDuration(remainingMs)} remaining</div>}
+        </div>
+      )}
+
+      {/* ── Distance progress ── */}
+      {totalMi != null && (
+        <div style={{ fontSize: "0.78rem", lineHeight: 1.8, marginBottom: 12 }}>
+          {milesFlown != null && milesFlown > 0 && <div>{fmtMiles(milesFlown)} flown</div>}
+          {milesToGo  != null && milesToGo  > 0 && <div>{fmtMiles(milesToGo)} to go</div>}
+        </div>
+      )}
+
+      {/* ── Status flags ── */}
+      {detail.diverted  && <div style={{ fontSize: "0.78rem", color: "#fbbf24", marginBottom: 4 }}>⚠ Diverted</div>}
+      {detail.cancelled && <div style={{ fontSize: "0.78rem", color: "#f87171", marginBottom: 4 }}>✕ Cancelled</div>}
+
+      {/* ── "Not your flight?" link ── */}
+      {schedIdent && (
+        <div style={{ fontSize: "0.74rem", opacity: 0.6, marginTop: 6 }}>
+          Not your flight?{" "}
+          <a
+            href={`https://www.flightaware.com/live/flight/${encodeURIComponent(linkIdent)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: "#00ff41", textDecoration: "underline" }}
+          >
+            {schedIdent} flight schedule
+          </a>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ── NASA GIBS / EOX layer configs ────────────────────────────
 const YESTERDAY = new Date(Date.now() - 86400000).toISOString().split("T")[0];
@@ -146,60 +382,27 @@ function loadCSS(href: string): void {
   document.head.appendChild(l);
 }
 
-function altColor(Cesium: any, altM: number): any {
-  if (altM < 3000) return Cesium.Color.YELLOW;
-  if (altM < 9000) return Cesium.Color.CYAN;
-  return Cesium.Color.fromCssColorString("#cc88ff");
-}
-
-function altColorCss(altM: number): string {
-  if (altM < 3000) return "#ffff00";
-  if (altM < 9000) return "#00ffff";
-  return "#cc88ff";
-}
-
-function airplaneSvgUri(color: string, headingDeg: number): string {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-    <g transform="rotate(${headingDeg}, 16, 16)">
-      <polygon points="16,2 20,24 16,20 12,24" fill="${color}" stroke="#000" stroke-width="1.2"/>
-      <polygon points="4,18 16,14 28,18 16,16" fill="${color}" stroke="#000" stroke-width="0.8"/>
-      <polygon points="10,26 16,23 22,26 16,25" fill="${color}" stroke="#000" stroke-width="0.6"/>
-    </g>
-  </svg>`;
-  return `data:image/svg+xml;base64,${btoa(svg)}`;
-}
-
-function parseAircraft(ac: any): AircraftData | null {
-  const isArray = Array.isArray(ac);
-  const icao: string = isArray ? ac[0] : (ac.hex ?? "");
-  const callsign: string = isArray ? ((ac[1] ?? "").trim() || icao) : ((ac.flight ?? "").trim() || icao);
-  const lon: number | null = isArray ? ac[5] : ac.lon;
-  const lat: number | null = isArray ? ac[6] : ac.lat;
-  const rawAlt = isArray ? ac[7] : ac.alt_baro;
-  const onGround: boolean = isArray ? ac[8] : (rawAlt === "ground" || ac.on_ground === true);
-  if (lon == null || lat == null || onGround) return null;
-  const altFt: number = typeof rawAlt === "number" ? rawAlt : 3000;
-  const altM = altFt * 0.3048;
-  const speedKts: number = isArray ? (ac[9] ?? 0) : (ac.gs ?? 0);
-  const heading: number = isArray ? (ac[10] ?? 0) : (ac.track ?? 0);
-  const verticalRate: number = ac.baro_rate ?? ac.geom_rate ?? 0;
-  return {
-    icao,
-    callsign,
-    registration: ac.r ?? "",
-    type: ac.t ?? "",
-    typeDesc: ac.desc ?? "",
-    operator: ac.ownOp ?? "",
-    altFt,
-    altM,
-    speedKts: Math.round(speedKts),
-    heading: Math.round(heading),
-    verticalRate: Math.round(verticalRate),
-    squawk: ac.squawk ?? "",
-    lat,
-    lon,
-    emergency: ac.emergency && ac.emergency !== "none" ? ac.emergency : "",
-  };
+/** Great-circle destination: true heading °, distance in nautical miles. */
+function destinationLatLonNm(latDeg: number, lonDeg: number, headingDeg: number, distanceNm: number): { lat: number; lon: number } {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const toDeg = (r: number) => (r * 180) / Math.PI;
+  const R = 3440.065;
+  const δ = distanceNm / R;
+  const θ = toRad(headingDeg);
+  const φ1 = toRad(latDeg);
+  const λ1 = toRad(lonDeg);
+  const sinφ1 = Math.sin(φ1);
+  const cosφ1 = Math.cos(φ1);
+  const sinδ = Math.sin(δ);
+  const cosδ = Math.cos(δ);
+  const sinφ2 = sinφ1 * cosδ + cosφ1 * sinδ * Math.cos(θ);
+  const φ2 = Math.asin(sinφ2);
+  const y = Math.sin(θ) * sinδ * cosφ1;
+  const x = cosδ - sinφ1 * sinφ2;
+  const λ2 = λ1 + Math.atan2(y, x);
+  let lon = toDeg(λ2);
+  lon = ((lon + 540) % 360) - 180;
+  return { lat: toDeg(φ2), lon };
 }
 
 // ── Heading compass ───────────────────────────────────────────
@@ -251,9 +454,12 @@ export default function GlobeViewer() {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<any>(null);
   const handlerRef = useRef<any>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const entitiesRef = useRef<Map<string, any>>(new Map());
   const aircraftDataRef = useRef<Map<string, AircraftData>>(new Map());
+  /** Per ICAO: [lon, lat, altM][] from recent polls (where the track came from on the map). */
+  const aircraftHistoryRef = useRef<Map<string, [number, number, number][]>>(new Map());
+  const aircraftTrackOverlayRef = useRef<{ history: any | null; forward: any | null } | null>(null);
+  const selectedAcRef = useRef<AircraftData | null>(null);
 
   // Vessel tracking
   const vesselEntitiesRef = useRef<Map<string, any>>(new Map());    // mmsi → billboard entity
@@ -272,6 +478,12 @@ export default function GlobeViewer() {
   const [vesselCount, setVesselCount] = useState(0);
   const [selectedVessel, setSelectedVessel] = useState<VesselData | null>(null);
   const [lastUpdate, setLastUpdate] = useState<string>("");
+  const [trackOriginPlace, setTrackOriginPlace] = useState("—");
+  const [trackDestPlace, setTrackDestPlace] = useState("—");
+  const [trackPlacesLoading, setTrackPlacesLoading] = useState(false);
+  const [faDetail, setFaDetail] = useState<FlightAwareFlightDetail | null>(null);
+  const [faError, setFaError] = useState<string | null>(null);
+  const [faMatchedBy, setFaMatchedBy] = useState<"callsign" | "registration" | null>(null);
   const showFlightsRef = useRef(true);
   const showVesselsRef = useRef(true);
 
@@ -287,84 +499,224 @@ export default function GlobeViewer() {
     intervalMs: MOCK_VESSEL_TICK_MS,
   });
 
-  // ── Fetch + update ────────────────────────────────────────────
-  const updateFlights = useCallback(async () => {
+  useEffect(() => {
+    selectedAcRef.current = selectedAc;
+  }, [selectedAc]);
+
+  useEffect(() => {
+    const icao = selectedAc?.icao;
+    if (!icao) {
+      setTrackOriginPlace("—");
+      setTrackDestPlace("—");
+      setTrackPlacesLoading(false);
+      setFaDetail(null);
+      setFaError(null);
+      setFaMatchedBy(null);
+      return;
+    }
+
+    const ac = aircraftDataRef.current.get(icao);
+    if (!ac) {
+      setTrackPlacesLoading(false);
+      return;
+    }
+
+    const hist = aircraftHistoryRef.current.get(icao) ?? [];
+    const oldest = hist[0];
+    const oLat = oldest ? oldest[1] : ac.lat;
+    const oLon = oldest ? oldest[0] : ac.lon;
+    const distNm = Math.min(45, Math.max(1.5, ac.speedKts * (AIRCRAFT_LOOKAHEAD_MINUTES / 60)));
+    const destPt = destinationLatLonNm(ac.lat, ac.lon, ac.heading, distNm);
+
+    let cancelled = false;
+    setTrackPlacesLoading(true);
+    setTrackOriginPlace("—");
+    setTrackDestPlace("—");
+    setFaDetail(null);
+    setFaError(null);
+    setFaMatchedBy(null);
+
+    const run = async () => {
+      const cs = (ac.callsign ?? "").trim();
+      const reg = (ac.registration ?? "").trim();
+      const tryFa = cs.length >= 3 || reg.length >= 2;
+
+      if (tryFa && !cancelled) {
+        try {
+          const q = new URLSearchParams();
+          if (cs.length >= 3) q.set("callsign", cs);
+          if (reg.length >= 2) q.set("registration", reg);
+          const faRes = await fetch(`/api/aircraft/flightaware?${q}`, { cache: "no-store" });
+          const fa = (await faRes.json()) as FlightAwareFlightResponse;
+          if (cancelled) return;
+          setFaDetail(fa.flight);
+          setFaMatchedBy(fa.matchedBy);
+          setFaError(fa.error);
+
+          let origin = fa.flight?.origin ? airportLabel(fa.flight.origin) : null;
+          let dest = fa.flight?.destination ? airportLabel(fa.flight.destination) : null;
+
+          if ((!origin || !dest) && !cancelled) {
+            try {
+              const params = new URLSearchParams();
+              if (!origin) {
+                params.set("olat", oLat.toFixed(5));
+                params.set("olon", oLon.toFixed(5));
+              }
+              if (!dest) {
+                params.set("dlat", destPt.lat.toFixed(5));
+                params.set("dlon", destPt.lon.toFixed(5));
+              }
+              if (params.toString()) {
+                const geoRes = await fetch(`/api/geocode/places?${params}`);
+                const geo = (await geoRes.json()) as { origin?: string; destination?: string };
+                if (!origin && geo.origin) origin = geo.origin;
+                if (!dest && geo.destination) dest = geo.destination;
+              }
+            } catch {
+              if (!origin) origin = "Place lookup failed";
+              if (!dest) dest = "Place lookup failed";
+            }
+          }
+
+          if (!cancelled) {
+            setTrackOriginPlace(origin ?? "—");
+            setTrackDestPlace(dest ?? "—");
+          }
+        } catch {
+          if (!cancelled) {
+            setFaError("flightaware_fetch_failed");
+            try {
+              const params = new URLSearchParams({
+                olat: oLat.toFixed(5),
+                olon: oLon.toFixed(5),
+                dlat: destPt.lat.toFixed(5),
+                dlon: destPt.lon.toFixed(5),
+              });
+              const geoRes = await fetch(`/api/geocode/places?${params}`);
+              const geo = (await geoRes.json()) as { origin?: string; destination?: string };
+              setTrackOriginPlace(geo.origin ?? "—");
+              setTrackDestPlace(geo.destination ?? "—");
+            } catch {
+              setTrackOriginPlace("Place lookup failed");
+              setTrackDestPlace("Place lookup failed");
+            }
+          }
+        }
+      } else if (!cancelled) {
+        try {
+          const params = new URLSearchParams({
+            olat: oLat.toFixed(5),
+            olon: oLon.toFixed(5),
+            dlat: destPt.lat.toFixed(5),
+            dlon: destPt.lon.toFixed(5),
+          });
+          const geoRes = await fetch(`/api/geocode/places?${params}`);
+          const geo = (await geoRes.json()) as { origin?: string; destination?: string };
+          setTrackOriginPlace(geo.origin ?? "—");
+          setTrackDestPlace(geo.destination ?? "—");
+        } catch {
+          setTrackOriginPlace("Place lookup failed");
+          setTrackDestPlace("Place lookup failed");
+        }
+      }
+
+      if (!cancelled) setTrackPlacesLoading(false);
+    };
+
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedAc?.icao, selectedAc?.callsign, selectedAc?.registration]);
+
+  const clearAircraftTrackOverlays = useCallback(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed()) return;
+    const o = aircraftTrackOverlayRef.current;
+    if (o?.history) try { viewer.entities.remove(o.history); } catch { /* noop */ }
+    if (o?.forward) try { viewer.entities.remove(o.forward); } catch { /* noop */ }
+    aircraftTrackOverlayRef.current = null;
+  }, []);
+
+  const syncSelectedAircraftTrackOverlays = useCallback(() => {
     const viewer = viewerRef.current;
     if (!viewer || viewer.isDestroyed()) return;
     const Cesium = (window as any).Cesium;
+    if (!Cesium) return;
 
-    try {
-      const res = await fetch("/api/flights");
-      if (!res.ok) return;
-      const data = await res.json();
-      const rawList: any[] = data.ac ?? data.states ?? [];
-      const seen = new Set<string>();
+    clearAircraftTrackOverlays();
+    if (!showFlightsRef.current) return;
+    const sel = selectedAcRef.current;
+    if (!sel) return;
 
-      for (const raw of rawList) {
-        const ac = parseAircraft(raw);
-        if (!ac) continue;
-        seen.add(ac.icao);
-        aircraftDataRef.current.set(ac.icao, ac);
-        const color = altColorCss(ac.altM);
-        const position = Cesium.Cartesian3.fromDegrees(ac.lon, ac.lat, ac.altM);
+    const ac = aircraftDataRef.current.get(sel.icao);
+    if (!ac) return;
 
-        if (entitiesRef.current.has(ac.icao)) {
-          const entity = entitiesRef.current.get(ac.icao)!;
-          entity.position = position;
-          entity.billboard.image = airplaneSvgUri(color, ac.heading);
-          entity.billboard.show = showFlightsRef.current;
-          entity.label.show = showFlightsRef.current;
-        } else {
-          const entity = viewer.entities.add({
-            id: ac.icao,
-            position,
-            billboard: {
-              image: airplaneSvgUri(color, ac.heading),
-              width: 28, height: 28,
-              verticalOrigin: Cesium.VerticalOrigin.CENTER,
-              horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-              show: showFlightsRef.current,
-              sizeInMeters: false,
-            },
-            label: {
-              text: ac.callsign,
-              font: "10px monospace",
-              fillColor: altColor(Cesium, ac.altM),
-              outlineColor: Cesium.Color.BLACK,
-              outlineWidth: 2,
-              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-              pixelOffset: new Cesium.Cartesian2(0, -22),
-              verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-              show: showFlightsRef.current,
-              translucencyByDistance: new Cesium.NearFarScalar(1e5, 1.0, 2e6, 0.0),
-            },
-          });
-          entitiesRef.current.set(ac.icao, entity);
-        }
-      }
+    const Ellipsoid = Cesium.Ellipsoid.WGS84;
+    const hist = aircraftHistoryRef.current.get(ac.icao) ?? [];
+    const trailColor = Cesium.Color.fromCssColorString(altColorCss(ac.altM)).withAlpha(0.42);
 
-      for (const [icao, entity] of entitiesRef.current) {
-        if (!seen.has(icao)) {
-          viewer.entities.remove(entity);
-          entitiesRef.current.delete(icao);
-          aircraftDataRef.current.delete(icao);
-        }
-      }
-
-      setFlightCount(seen.size);
-      const now = new Date();
-      setLastUpdate(`${now.getHours().toString().padStart(2,"0")}:${now.getMinutes().toString().padStart(2,"0")}:${now.getSeconds().toString().padStart(2,"0")}Z`);
-
-      // Refresh selected panel if it's still in the feed
-      setSelectedAc(prev => {
-        if (!prev) return null;
-        return aircraftDataRef.current.get(prev.icao) ?? null;
+    let histEntity: any = null;
+    if (hist.length >= 2) {
+      const positions = hist.map(([lon, lat, altM]) =>
+        Cesium.Cartesian3.fromDegrees(lon, lat, altM, Ellipsoid)
+      );
+      histEntity = viewer.entities.add({
+        id: `ac_track_hist_${ac.icao}`,
+        polyline: {
+          positions,
+          width: 2,
+          arcType: Cesium.ArcType.GEODESIC,
+          material: new Cesium.PolylineGlowMaterialProperty({
+            glowPower: 0.06,
+            color: trailColor,
+          }),
+        },
       });
-
-    } catch (e) {
-      console.warn("[flights] update error", e);
     }
-  }, []);
+
+    const distNm = Math.min(45, Math.max(1.5, ac.speedKts * (AIRCRAFT_LOOKAHEAD_MINUTES / 60)));
+    const dest = destinationLatLonNm(ac.lat, ac.lon, ac.heading, distNm);
+    const forwardColor = Cesium.Color.fromCssColorString("#a8ffc8").withAlpha(0.9);
+    const forwardEntity = viewer.entities.add({
+      id: `ac_track_fwd_${ac.icao}`,
+      polyline: {
+        positions: [
+          Cesium.Cartesian3.fromDegrees(ac.lon, ac.lat, ac.altM, Ellipsoid),
+          Cesium.Cartesian3.fromDegrees(dest.lon, dest.lat, ac.altM, Ellipsoid),
+        ],
+        width: 2.5,
+        arcType: Cesium.ArcType.GEODESIC,
+        material: new Cesium.PolylineDashMaterialProperty({
+          color: forwardColor,
+          gapColor: Cesium.Color.TRANSPARENT,
+          dashLength: 14,
+        }),
+      },
+    });
+
+    aircraftTrackOverlayRef.current = { history: histEntity, forward: forwardEntity };
+  }, [clearAircraftTrackOverlays]);
+
+  useEffect(() => {
+    if (!ready) return;
+    syncSelectedAircraftTrackOverlays();
+  }, [ready, selectedAc, showFlights, syncSelectedAircraftTrackOverlays]);
+
+  useAircraftLayer({
+    viewer: ready ? viewerRef.current : null,
+    showFlightsRef,
+    entitiesRef,
+    aircraftDataRef,
+    aircraftHistoryRef,
+    setFlightCount,
+    setLastUpdate,
+    setSelectedAc,
+    onAfterUpdate: syncSelectedAircraftTrackOverlays,
+    intervalMs: AIRCRAFT_POLL_MS,
+  });
 
   // ── Init ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -424,6 +776,10 @@ export default function GlobeViewer() {
               const mmsi = entityId.replace("vessel_", "");
               const vessel = vesselDataRef.current.get(mmsi);
               if (vessel) { setSelectedVessel(vessel); setSelectedAc(null); }
+            } else if (entityId.startsWith("ac_track_hist_") || entityId.startsWith("ac_track_fwd_")) {
+              const icao = entityId.replace(/^ac_track_(?:hist|fwd)_/, "");
+              const ac = aircraftDataRef.current.get(icao);
+              if (ac) { setSelectedAc(ac); setSelectedVessel(null); }
             } else if (!entityId.startsWith("trail_")) {
               const ac = aircraftDataRef.current.get(entityId);
               if (ac) { setSelectedAc(ac); setSelectedVessel(null); }
@@ -434,9 +790,6 @@ export default function GlobeViewer() {
           }
         }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
-        await updateFlights();
-        pollRef.current = setInterval(updateFlights, POLL_INTERVAL_MS);
-
       } catch (err) {
         console.error(err);
         if (active) setError("Failed to initialise globe.");
@@ -446,11 +799,10 @@ export default function GlobeViewer() {
     init();
     return () => {
       active = false;
-      if (pollRef.current) clearInterval(pollRef.current);
       handlerRef.current?.destroy();
       if (viewerRef.current && !viewerRef.current.isDestroyed()) viewerRef.current.destroy();
     };
-  }, [updateFlights]);
+  }, []);
 
   const toggleFlights = useCallback(() => {
     const next = !showFlightsRef.current;
@@ -460,7 +812,8 @@ export default function GlobeViewer() {
       entity.billboard.show = next;
       entity.label.show = next;
     }
-  }, []);
+    if (!next) clearAircraftTrackOverlays();
+  }, [clearAircraftTrackOverlays]);
 
   const switchImagery = useCallback(async (newMode: ImageryMode) => {
     if (!viewerRef.current || newMode === mode) return;
@@ -687,7 +1040,27 @@ export default function GlobeViewer() {
                   <div className="mil-value">{selectedAc.operator}</div>
                 </div>
               )}
+              {!faDetail?.origin && (
+                <div className="mil-cell mil-cell-wide">
+                  <div className="mil-label">ORIGIN</div>
+                  <div className="mil-value">{trackPlacesLoading ? "…" : trackOriginPlace}</div>
+                </div>
+              )}
+              {!faDetail?.destination && (
+                <div className="mil-cell mil-cell-wide">
+                  <div className="mil-label">DESTINATION</div>
+                  <div className="mil-value">{trackPlacesLoading ? "…" : trackDestPlace}</div>
+                </div>
+              )}
             </div>
+
+            {/* FlightAware AeroAPI */}
+            <FlightAwareCard
+              detail={faDetail}
+              faError={faError}
+              loading={trackPlacesLoading}
+              callsign={selectedAc.callsign ?? ""}
+            />
 
             {/* Fly to button */}
             <button className="mil-flyto" onClick={flyToAircraft}>
