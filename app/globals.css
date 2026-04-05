@@ -1,323 +1,226 @@
 @import "tailwindcss";
 
-* { box-sizing: border-box; margin: 0; padding: 0; }
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body {
   height: 100%; width: 100%;
   overflow: hidden;
-  background: #030b03;
+  background: #020a02;
   font-family: "Inter", system-ui, sans-serif;
+  color-scheme: dark;
 }
 
-/* Cesium fills viewport */
-#cesiumContainer { position: absolute; inset: 0; }
-
+#cesiumContainer { position: fixed; inset: 0; z-index: 0; }
 .cesium-widget-credits { display: none !important; }
 
-/* ── HUD Header ─────────────────────────────────────────────── */
-.hud {
-  position: absolute; top: 0; left: 0; right: 0;
-  pointer-events: none; z-index: 10;
-  padding: 1.1rem 1.4rem;
-  display: flex; align-items: flex-start; justify-content: space-between;
-}
-.hud-logo { pointer-events: auto; display: flex; align-items: center; gap: 0.5rem; }
-.hud-title {
-  font-size: 0.95rem; font-weight: 700;
-  letter-spacing: 0.04em; color: #00ff88;
-  text-shadow: 0 0 12px rgba(0,255,136,0.5);
-  text-transform: uppercase;
-}
-.hud-subtitle {
-  font-size: 0.65rem; color: rgba(0,255,136,0.4);
-  letter-spacing: 0.12em; text-transform: uppercase;
+/* ── Keyframes ──────────────────────────────────────────────── */
+@keyframes pulse        { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+@keyframes blink        { 50% { opacity: 0.35; } }
+@keyframes glow         { 0%, 100% { box-shadow: 0 0 5px #00ff88; } 50% { box-shadow: 0 0 10px #00ff88, 0 0 20px rgba(0,255,136,0.3); } }
+@keyframes cursor-blink { 0%, 100% { opacity: 1; } 49% { opacity: 1; } 50% { opacity: 0; } 99% { opacity: 0; } }
+
+/* SITREP streaming cursor */
+.sitrep-cursor { animation: cursor-blink 0.9s step-start infinite; }
+
+/* ── Live pulse dot ─────────────────────────────────────────── */
+.live-dot {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: #00ff88; box-shadow: 0 0 6px #00ff88;
+  animation: pulse 2s ease-in-out infinite; flex-shrink: 0;
 }
 
-/* ── Controls bar ───────────────────────────────────────────── */
-.controls {
-  position: absolute; bottom: 1.4rem; left: 50%;
-  transform: translateX(-50%);
-  pointer-events: auto; z-index: 10;
-  display: flex; gap: 0.35rem; align-items: center;
-  background: rgba(3, 12, 3, 0.85);
-  border: 1px solid rgba(0,255,136,0.15);
-  border-radius: 4px;
-  padding: 0.45rem 0.7rem;
-  backdrop-filter: blur(12px);
-  box-shadow: 0 0 20px rgba(0,255,0,0.05), inset 0 1px 0 rgba(0,255,136,0.08);
-}
-.ctrl-btn {
-  display: flex; align-items: center; gap: 0.3rem;
-  font-size: 0.65rem; font-weight: 600;
-  letter-spacing: 0.08em; text-transform: uppercase;
-  color: rgba(0,255,136,0.5);
-  background: transparent; border: none;
-  border-radius: 3px; padding: 0.3rem 0.6rem;
-  cursor: pointer; transition: all 0.15s;
+/* ── Counter chips (top bar) ─────────────────────────────────── */
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 9px 3px 7px;
+  border-radius: 20px; cursor: default;
   font-family: "JetBrains Mono", monospace;
-  white-space: nowrap;
+  font-size: 0.61rem; font-weight: 700; letter-spacing: 0.05em;
+  transition: all 0.2s ease;
 }
-.ctrl-btn:hover, .ctrl-btn.active {
-  color: #00ff88;
-  background: rgba(0,255,136,0.08);
-  text-shadow: 0 0 8px rgba(0,255,136,0.6);
-}
-.ctrl-btn svg { width: 13px; height: 13px; flex-shrink: 0; }
-.ctrl-divider { width: 1px; height: 14px; background: rgba(0,255,136,0.1); flex-shrink: 0; }
+.chip svg { width: 10px; height: 10px; flex-shrink: 0; }
 
-/* ── Flight counter ─────────────────────────────────────────── */
-.flight-counter {
-  position: absolute; top: 1.1rem; right: 1.4rem;
-  z-index: 10;
-  display: flex; align-items: center; gap: 0.5rem;
-  font-size: 0.65rem; font-weight: 700;
-  letter-spacing: 0.12em; text-transform: uppercase;
-  color: #00ff88;
-  background: rgba(3,12,3,0.8);
-  border: 1px solid rgba(0,255,136,0.2);
-  border-radius: 3px; padding: 0.3rem 0.75rem;
-  backdrop-filter: blur(10px);
-  font-family: "JetBrains Mono", monospace;
-  text-shadow: 0 0 8px rgba(0,255,136,0.5);
-}
-.counter-dot {
-  width: 6px; height: 6px; border-radius: 50%;
-  background: #00ff88;
-  box-shadow: 0 0 6px #00ff88;
-  animation: pulse 2s infinite;
-}
-.counter-sep {
-  color: rgba(0,255,136,0.2);
-  margin: 0 0.4rem;
-}
-.counter-time {
-  color: rgba(0,255,136,0.4);
-  margin-left: 0.4rem;
-  font-size: 0.6rem;
-}
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
-}
+/* ── Left-panel hover states ─────────────────────────────────── */
+.ui-toggle:hover { background: rgba(0,255,136,0.07) !important; }
+.ui-img-btn:hover { background: rgba(0,255,136,0.09) !important; color: #00ff88 !important; border-color: rgba(0,255,136,0.3) !important; }
+.ui-reset:hover   { background: rgba(0,255,136,0.07) !important; color: #00ff88 !important; border-color: rgba(0,255,136,0.35) !important; }
 
-/* ── Military Sidebar ───────────────────────────────────────── */
+/* ── Sidebar slide + glass ───────────────────────────────────── */
 .mil-sidebar {
-  position: absolute;
-  top: 0; right: 0; bottom: 0;
-  width: 300px;
-  z-index: 20;
-  background: rgba(3, 8, 3, 0.95);
-  border-left: 1px solid rgba(0,255,136,0.2);
-  backdrop-filter: blur(20px);
+  position: fixed !important;
+  top: 44px !important; right: 0 !important; bottom: 0 !important;
+  width: 300px !important; z-index: 500 !important;
+
+  background: rgba(2, 8, 2, 0.96) !important;
+  border-left: 1px solid rgba(0,255,136,0.15) !important;
+  backdrop-filter: blur(24px) saturate(1.5) !important;
+  -webkit-backdrop-filter: blur(24px) saturate(1.5) !important;
+  box-shadow: -8px 0 32px rgba(0,0,0,0.5) !important;
+
   transform: translateX(100%);
-  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
   display: flex; flex-direction: column;
   overflow: hidden;
-  /* scanline overlay */
+
+  /* subtle scanlines */
   background-image: repeating-linear-gradient(
-    0deg,
-    transparent,
-    transparent 2px,
-    rgba(0,0,0,0.08) 2px,
-    rgba(0,0,0,0.08) 4px
-  );
+    0deg, transparent, transparent 2px,
+    rgba(0,0,0,0.07) 2px, rgba(0,0,0,0.07) 4px
+  ) !important;
 }
 .mil-sidebar.open { transform: translateX(0); }
 
-/* Top corner accent lines */
+/* top-edge accent glow */
 .mil-sidebar::before {
-  content: "";
-  position: absolute; top: 0; left: 0; right: 0;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, #00ff88, transparent);
-  opacity: 0.6;
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px; z-index: 1;
+  background: linear-gradient(90deg, transparent 5%, #00ff88 40%, #00ff88 60%, transparent 95%);
+  opacity: 0.5;
 }
 
+/* ── Sidebar header ──────────────────────────────────────────── */
 .mil-header {
   display: flex; justify-content: space-between; align-items: flex-start;
-  padding: 1.2rem 1.1rem 0.9rem;
-  border-bottom: 1px solid rgba(0,255,136,0.12);
-  flex-shrink: 0;
+  padding: 1.1rem 1rem 0.9rem;
+  border-bottom: 1px solid rgba(0,255,136,0.1); flex-shrink: 0;
 }
-.mil-header-left { display: flex; flex-direction: column; gap: 0.2rem; }
+.mil-header-left { display: flex; flex-direction: column; gap: 0.25rem; }
 .mil-tag {
-  font-size: 0.55rem; font-weight: 700;
-  letter-spacing: 0.2em; text-transform: uppercase;
-  color: #00ff88; opacity: 0.6;
-  font-family: "JetBrains Mono", monospace;
+  font-size: 0.5rem; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase;
+  color: rgba(0,255,136,0.5); font-family: "JetBrains Mono", monospace;
 }
 .mil-callsign {
-  font-size: 1.6rem; font-weight: 800;
-  letter-spacing: 0.06em;
-  color: #00ff88;
-  text-shadow: 0 0 20px rgba(0,255,136,0.4);
+  font-size: 1.5rem; font-weight: 800; letter-spacing: 0.06em; line-height: 1;
+  color: #00ff88; text-shadow: 0 0 24px rgba(0,255,136,0.4), 0 0 48px rgba(0,255,136,0.15);
   font-family: "JetBrains Mono", monospace;
-  line-height: 1;
 }
-.mil-reg {
-  font-size: 0.72rem; color: rgba(0,255,136,0.5);
-  font-family: "JetBrains Mono", monospace;
-  letter-spacing: 0.1em;
-}
+.mil-reg { font-size: 0.68rem; color: rgba(0,255,136,0.4); font-family: "JetBrains Mono", monospace; letter-spacing: 0.1em; }
 .mil-close {
-  background: transparent; border: 1px solid rgba(0,255,136,0.2);
-  border-radius: 3px; padding: 0.35rem;
-  cursor: pointer; color: rgba(0,255,136,0.5);
-  transition: all 0.15s; flex-shrink: 0;
+  background: transparent; border: 1px solid rgba(0,255,136,0.18);
+  border-radius: 4px; padding: 5px; cursor: pointer;
+  color: rgba(0,255,136,0.4); transition: all 0.18s ease; flex-shrink: 0;
 }
-.mil-close:hover { color: #00ff88; border-color: rgba(0,255,136,0.5); background: rgba(0,255,136,0.08); }
-.mil-close svg { width: 14px; height: 14px; display: block; }
+.mil-close:hover { background: rgba(0,255,136,0.1) !important; color: #00ff88 !important; border-color: rgba(0,255,136,0.45) !important; }
+.mil-close svg { width: 13px; height: 13px; display: block; }
 
-/* Emergency */
+/* ── Emergency banner ────────────────────────────────────────── */
 .mil-emergency {
-  background: rgba(255,50,50,0.15);
-  border-top: 1px solid rgba(255,50,50,0.4);
-  border-bottom: 1px solid rgba(255,50,50,0.4);
-  color: #ff5555;
-  font-size: 0.7rem; font-weight: 700;
-  letter-spacing: 0.1em; text-transform: uppercase;
-  padding: 0.5rem 1.1rem;
-  font-family: "JetBrains Mono", monospace;
+  background: rgba(255,40,40,0.12); border-top: 1px solid rgba(255,50,50,0.35);
+  border-bottom: 1px solid rgba(255,50,50,0.35); color: #ff5555;
+  font-size: 0.68rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 0.45rem 1rem; font-family: "JetBrains Mono", monospace;
   animation: blink 1s step-end infinite;
 }
-@keyframes blink { 50% { opacity: 0.4; } }
 
-/* Gauges row */
+/* ── Gauges row ──────────────────────────────────────────────── */
 .mil-gauges {
   display: flex; align-items: center; justify-content: space-around;
-  padding: 1rem 1.1rem 0.8rem;
-  border-bottom: 1px solid rgba(0,255,136,0.08);
-  flex-shrink: 0;
+  padding: 1rem 0.9rem 0.85rem;
+  border-bottom: 1px solid rgba(0,255,136,0.07); flex-shrink: 0;
+  background: rgba(0,255,136,0.015);
 }
-
-/* Heading dial */
-.hdg-dial { display: flex; flex-direction: column; align-items: center; gap: 0.3rem; }
+.hdg-dial { display: flex; flex-direction: column; align-items: center; gap: 4px; }
 .hdg-value {
-  font-size: 0.7rem; font-weight: 700;
-  color: #00ff88; font-family: "JetBrains Mono", monospace;
-  letter-spacing: 0.08em;
+  font-size: 0.68rem; font-weight: 700; color: #00ff88;
+  font-family: "JetBrains Mono", monospace; letter-spacing: 0.1em; text-align: center;
 }
-
-/* Altitude bar */
-.alt-bar-wrap { display: flex; flex-direction: column; align-items: center; gap: 0.4rem; }
+.alt-bar-wrap  { display: flex; flex-direction: column; align-items: center; gap: 5px; }
 .alt-bar-track {
-  width: 20px; height: 80px;
-  background: rgba(0,255,136,0.05);
-  border: 1px solid rgba(0,255,136,0.2);
-  border-radius: 2px;
-  display: flex; flex-direction: column; justify-content: flex-end;
-  overflow: hidden;
+  width: 18px; height: 72px; background: rgba(0,255,136,0.04);
+  border: 1px solid rgba(0,255,136,0.18); border-radius: 2px;
+  display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden;
 }
-.alt-bar-fill {
-  width: 100%; border-radius: 1px;
-  transition: height 0.5s ease, background 0.5s ease;
-}
+.alt-bar-fill { width: 100%; transition: height 0.6s ease, background 0.6s ease; }
 .alt-bar-labels {
-  display: flex; flex-direction: column; align-items: center; gap: 0.15rem;
-  font-family: "JetBrains Mono", monospace; font-size: 0.6rem;
-  color: rgba(0,255,136,0.5);
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  font-family: "JetBrains Mono", monospace; font-size: 0.57rem; color: rgba(0,255,136,0.45);
 }
-.alt-bar-labels span:first-child { font-size: 0.72rem; font-weight: 700; }
+.alt-bar-labels span:first-child { font-size: 0.68rem; font-weight: 700; }
 
-/* Data grid */
+/* ── Data grid ───────────────────────────────────────────────── */
 .mil-grid {
-  display: grid; grid-template-columns: 1fr 1fr;
-  gap: 1px;
-  background: rgba(0,255,136,0.06);
-  border-top: 1px solid rgba(0,255,136,0.08);
-  flex: 1; overflow-y: auto;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 1px;
+  background: rgba(0,255,136,0.05);
+  border-top: 1px solid rgba(0,255,136,0.07);
+  flex: 1; overflow-y: auto; min-height: 0;
 }
+.mil-grid::-webkit-scrollbar { width: 2px; }
+.mil-grid::-webkit-scrollbar-track { background: transparent; }
+.mil-grid::-webkit-scrollbar-thumb { background: rgba(0,255,136,0.18); border-radius: 2px; }
+
 .mil-cell {
-  background: rgba(3,8,3,0.95);
-  padding: 0.7rem 0.85rem;
+  background: rgba(2,7,2,0.97); padding: 0.65rem 0.85rem;
   display: flex; flex-direction: column; gap: 0.25rem;
+  transition: background 0.15s;
 }
+.mil-cell:hover { background: rgba(0,255,136,0.04); }
 .mil-cell-wide { grid-column: 1 / -1; }
 
 .mil-label {
-  font-size: 0.55rem; font-weight: 700;
-  letter-spacing: 0.15em; text-transform: uppercase;
-  color: rgba(0,255,136,0.35);
-  font-family: "JetBrains Mono", monospace;
+  font-size: 0.5rem; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase;
+  color: rgba(0,255,136,0.28); font-family: "JetBrains Mono", monospace;
 }
-.mil-value {
-  font-size: 0.82rem; font-weight: 600;
-  color: #c8f0c8;
-  font-family: "JetBrains Mono", monospace;
-  letter-spacing: 0.04em;
-}
-.mil-mono { font-size: 0.72rem; }
-.mil-unit { font-size: 0.6rem; color: rgba(0,255,136,0.4); font-weight: 400; }
-.mil-climb { color: #00ff88; }
+.mil-value  { font-size: 0.8rem; font-weight: 600; color: #d4f0d4; font-family: "JetBrains Mono", monospace; letter-spacing: 0.03em; }
+.mil-mono   { font-size: 0.7rem !important; }
+.mil-unit   { font-size: 0.57rem; color: rgba(0,255,136,0.35); font-weight: 400; }
+.mil-climb  { color: #00ff88; }
 .mil-descend { color: #ff8844; }
 
-/* Fly-to button */
+/* ── Fly-to button ───────────────────────────────────────────── */
 .mil-flyto {
-  display: flex; align-items: center; justify-content: center; gap: 0.5rem;
-  margin: 0.8rem 1rem;
-  padding: 0.6rem;
-  background: transparent;
-  border: 1px solid rgba(0,255,136,0.3);
-  border-radius: 3px;
-  color: #00ff88; font-size: 0.65rem; font-weight: 700;
-  letter-spacing: 0.12em; text-transform: uppercase;
-  font-family: "JetBrains Mono", monospace;
-  cursor: pointer;
-  transition: all 0.15s;
-  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  margin: 0.75rem 0.9rem; padding: 0.6rem;
+  background: rgba(0,255,136,0.04); border: 1px solid rgba(0,255,136,0.25); border-radius: 4px;
+  color: rgba(0,255,136,0.8); font-size: 0.6rem; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  font-family: "JetBrains Mono", monospace; cursor: pointer; transition: all 0.18s ease; flex-shrink: 0;
 }
-.mil-flyto:hover {
-  background: rgba(0,255,136,0.1);
-  border-color: #00ff88;
-  box-shadow: 0 0 12px rgba(0,255,136,0.2);
-}
-.mil-flyto svg { width: 13px; height: 13px; }
+.mil-flyto:hover { background: rgba(0,255,136,0.12) !important; border-color: rgba(0,255,136,0.6) !important; color: #00ff88 !important; box-shadow: 0 0 16px rgba(0,255,136,0.2) !important; }
+.mil-flyto svg { width: 12px; height: 12px; }
 
-/* Legend */
+/* ── Legend ──────────────────────────────────────────────────── */
 .mil-legend {
-  padding: 0.5rem 1rem 0.9rem;
-  font-size: 0.58rem; letter-spacing: 0.06em;
-  color: rgba(0,255,136,0.3);
-  display: flex; align-items: center; flex-wrap: wrap;
-  font-family: "JetBrains Mono", monospace;
-  flex-shrink: 0;
+  padding: 0.5rem 0.9rem 0.8rem;
+  font-size: 0.54rem; letter-spacing: 0.06em; color: rgba(0,255,136,0.22);
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px;
+  font-family: "JetBrains Mono", monospace; flex-shrink: 0;
 }
-.leg-dot {
-  display: inline-block; width: 7px; height: 7px;
-  border-radius: 50%; margin-right: 3px;
-}
+.leg-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 3px; vertical-align: middle; }
 
-/* Empty state */
+/* ── Empty state ─────────────────────────────────────────────── */
 .mil-empty {
   flex: 1; display: flex; flex-direction: column;
-  align-items: center; justify-content: center;
-  gap: 0.75rem;
-  color: rgba(0,255,136,0.2);
+  align-items: center; justify-content: center; gap: 10px; color: rgba(0,255,136,0.15);
 }
-.mil-empty svg { width: 40px; height: 40px; }
-.mil-empty p {
-  font-size: 0.7rem; font-weight: 700;
-  letter-spacing: 0.15em; text-transform: uppercase;
-  font-family: "JetBrains Mono", monospace;
-}
-.mil-empty-sub {
-  font-size: 0.6rem !important;
-  letter-spacing: 0.08em !important;
-  opacity: 0.6;
-}
+.mil-empty svg { width: 36px; height: 36px; opacity: 0.6; }
+.mil-empty p { font-size: 0.66rem; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; font-family: "JetBrains Mono", monospace; }
+.mil-empty-sub { font-size: 0.57rem !important; letter-spacing: 0.08em !important; opacity: 0.55; }
 
-/* ── Coordinate readout ─────────────────────────────────────── */
+/* ── News feed scrollable area ──────────────────────────────── */
+.news-scroll::-webkit-scrollbar { width: 2px; }
+.news-scroll::-webkit-scrollbar-track { background: transparent; }
+.news-scroll::-webkit-scrollbar-thumb { background: rgba(0,255,136,0.15); border-radius: 2px; }
+.news-item:hover { background: rgba(0,255,136,0.05) !important; }
+.news-item:active { background: rgba(0,255,136,0.09) !important; }
+.news-headline-link:hover { color: #00ff88 !important; text-decoration: underline !important; }
+.news-headline-link:hover svg { opacity: 0.85 !important; }
+
+/* ── Metrics panel scrollable area ──────────────────────────── */
+.metrics-scroll::-webkit-scrollbar { width: 2px; }
+.metrics-scroll::-webkit-scrollbar-track { background: transparent; }
+.metrics-scroll::-webkit-scrollbar-thumb { background: rgba(0,255,136,0.15); border-radius: 2px; }
+
+/* ── Search input ───────────────────────────────────────────── */
+.search-input::placeholder { color: rgba(0,255,136,0.2); }
+.search-input:focus { border-color: rgba(0,255,136,0.4) !important; box-shadow: 0 0 0 1px rgba(0,255,136,0.1); }
+
+/* ── Panel toggle buttons in top bar ────────────────────────── */
+.panel-toggle-btn:hover { filter: brightness(1.3); }
+
+/* ── Coordinate readout ──────────────────────────────────────── */
 .coords {
-  position: absolute; bottom: 1.4rem; right: 1.4rem;
-  z-index: 10;
-  font-size: 0.62rem; color: rgba(0,255,136,0.3);
+  position: fixed !important; bottom: 12px; right: 14px;
+  z-index: 100 !important; pointer-events: none;
+  font-size: 0.57rem; color: rgba(0,255,136,0.22);
   font-family: "JetBrains Mono", monospace;
-  letter-spacing: 0.06em; line-height: 1.6;
-  text-align: right;
-  text-shadow: 0 0 6px rgba(0,255,0,0.3);
+  letter-spacing: 0.07em; line-height: 1.7; text-align: right;
+  text-shadow: 0 0 8px rgba(0,255,136,0.15);
 }
-
-/* Scrollbar styling for sidebar */
-.mil-grid::-webkit-scrollbar { width: 3px; }
-.mil-grid::-webkit-scrollbar-track { background: transparent; }
-.mil-grid::-webkit-scrollbar-thumb { background: rgba(0,255,136,0.2); border-radius: 2px; }

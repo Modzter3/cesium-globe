@@ -172,8 +172,8 @@ export function useAircraftLayer({
             position: positionProp,
             billboard: {
               image: airplaneSvgUri(color, ac.heading),
-              width: 28,
-              height: 28,
+              width: 36,
+              height: 36,
               verticalOrigin: (Cesium.VerticalOrigin as { CENTER: unknown }).CENTER,
               horizontalOrigin: (Cesium.HorizontalOrigin as { CENTER: unknown }).CENTER,
               show,
@@ -181,7 +181,7 @@ export function useAircraftLayer({
             },
             label: {
               text: ac.callsign,
-              font: "10px monospace",
+              font: "11px 'Courier New',monospace",
               fillColor: altColor(Cesium as never, ac.altM),
               outlineColor: (Cesium.Color as { BLACK: unknown }).BLACK,
               outlineWidth: 2,

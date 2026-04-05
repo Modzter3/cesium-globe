@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "CesiumJS Globe",
-  description: "Interactive 3D globe built with CesiumJS and Next.js",
+  title: "Global Sentinel",
+  description: "Real-time spatial intelligence — aircraft, vessels, satellites, and conflict events on a 3D globe.",
 };
 
 export default function RootLayout({
