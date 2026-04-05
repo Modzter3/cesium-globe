@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { useMockVesselLayer } from "@/hooks/useMockVesselLayer";
+import { shipColorCss, shipTypeLabel } from "@/lib/vesselBillboard";
+import type { VesselData } from "@/types/vessel";
 
 type ImageryMode = "satellite" | "osm" | "dark" | "viirs" | "sentinel2" | "modis";
 
@@ -28,62 +31,13 @@ interface AircraftData {
   emergency: string;
 }
 
-interface VesselData {
-  mmsi: string;
-  name: string;
-  callsign: string;
-  lat: number;
-  lon: number;
-  sog: number;         // knots
-  cog: number;         // degrees
-  heading: number;
-  shipType: number;
-  destination: string;
-  draught: number;
-  length: number;
-  width: number;
-}
-
-// Ship type category label
-function shipTypeLabel(type: number): string {
-  if (type >= 60 && type <= 69) return "PASSENGER";
-  if (type >= 70 && type <= 79) return "CARGO";
-  if (type >= 80 && type <= 89) return "TANKER";
-  if (type === 30) return "FISHING";
-  if (type === 36 || type === 37) return "SAILING";
-  if (type >= 50 && type <= 59) return "SPECIAL";
-  if (type >= 20 && type <= 29) return "WIG";
-  return "VESSEL";
-}
-
-// Ship color by type
-function shipColorCss(type: number): string {
-  if (type >= 70 && type <= 79) return "#ffa500";  // cargo - orange
-  if (type >= 80 && type <= 89) return "#ff4444";  // tanker - red
-  if (type >= 60 && type <= 69) return "#44aaff";  // passenger - blue
-  if (type === 30) return "#44ff88";               // fishing - green
-  return "#ffffff";                                  // default - white
-}
-
-// Ship icon SVG as data URI
-function shipSvgUri(colorCss: string, headingDeg: number): string {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">
-    <g transform="rotate(${headingDeg}, 14, 14)">
-      <polygon points="14,2 18,10 18,22 10,22 10,10" fill="${colorCss}" stroke="#000" stroke-width="1.2"/>
-      <polygon points="14,2 18,10 10,10" fill="${colorCss}" stroke="#000" stroke-width="0.8"/>
-    </g>
-  </svg>`;
-  return `data:image/svg+xml;base64,${btoa(svg)}`;
-}
-
 const CESIUM_TOKEN =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJlYWEzYTYzMi1iYTMyLTQ5MjctYmEwMy05NGY1ZmQ5NGY0NzQiLCJpZCI6NDEzNTkzLCJpYXQiOjE3NzUyODI2Mjl9._sdtsqjhWpRKOwWKY7gMjh4fohPNRpz_WtaoTdgOHC4";
 
 const CESIUM_VERSION = "1.127";
 const CESIUM_CDN = `https://cesium.com/downloads/cesiumjs/releases/${CESIUM_VERSION}/Build/Cesium`;
 const POLL_INTERVAL_MS = 10_000;
-const VESSEL_POLL_MS = 30_000;   // vessels update every 30s (WebSocket bridge takes ~5s)
-const MAX_TRAIL_POINTS = 20;     // position history per vessel
+const MOCK_VESSEL_TICK_MS = 2000;
 
 // ── NASA GIBS / EOX layer configs ────────────────────────────
 const YESTERDAY = new Date(Date.now() - 86400000).toISOString().split("T")[0];
@@ -128,13 +82,60 @@ const CloseIcon = () => (
 );
 
 // ── Helpers ───────────────────────────────────────────────────
-function loadScript(src: string): Promise<void> {
+/**
+ * Injects Cesium.js once and waits until `window.Cesium` is actually defined.
+ * A bare `script` tag in the DOM is not enough — the bundle may still be executing
+ * (and duplicate visits must not resolve early).
+ */
+function loadCesiumScript(src: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
+    let settled = false;
+    const ok = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    const err = (message: string) => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(message));
+    };
+
+    const waitForGlobal = () => {
+      const deadline = Date.now() + 30_000;
+      const step = () => {
+        const w = window as unknown as { Cesium?: { Ion?: unknown } };
+        if (w.Cesium?.Ion != null) {
+          ok();
+          return;
+        }
+        if (Date.now() > deadline) {
+          err("Timed out waiting for Cesium (window.Cesium.Ion never appeared)");
+          return;
+        }
+        requestAnimationFrame(step);
+      };
+      step();
+    };
+
+    const existing = document.querySelector<HTMLScriptElement>(`script[src="${src}"]`);
+    if (existing) {
+      const w = window as unknown as { Cesium?: { Ion?: unknown } };
+      if (w.Cesium?.Ion != null) {
+        ok();
+        return;
+      }
+      existing.addEventListener("load", waitForGlobal, { once: true });
+      existing.addEventListener("error", () => err(`Failed to load ${src}`), { once: true });
+      queueMicrotask(waitForGlobal);
+      return;
+    }
+
     const s = document.createElement("script");
-    s.src = src; s.async = false;
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error(`Failed to load ${src}`));
+    s.src = src;
+    s.async = false;
+    s.onload = () => waitForGlobal();
+    s.onerror = () => err(`Failed to load ${src}`);
     document.head.appendChild(s);
   });
 }
@@ -259,7 +260,6 @@ export default function GlobeViewer() {
   const vesselTrailsRef = useRef<Map<string, any>>(new Map());      // mmsi → polyline entity
   const vesselHistoryRef = useRef<Map<string, [number,number][]>>(new Map()); // mmsi → [[lon,lat],...]
   const vesselDataRef = useRef<Map<string, VesselData>>(new Map());
-  const vesselPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [mode, setMode] = useState<ImageryMode>("satellite");
   const [coords, setCoords] = useState<CoordState | null>(null);
@@ -274,6 +274,18 @@ export default function GlobeViewer() {
   const [lastUpdate, setLastUpdate] = useState<string>("");
   const showFlightsRef = useRef(true);
   const showVesselsRef = useRef(true);
+
+  useMockVesselLayer({
+    viewer: ready ? viewerRef.current : null,
+    showVesselsRef,
+    vesselEntitiesRef,
+    vesselTrailsRef,
+    vesselHistoryRef,
+    vesselDataRef,
+    setVesselCount,
+    setSelectedVessel,
+    intervalMs: MOCK_VESSEL_TICK_MS,
+  });
 
   // ── Fetch + update ────────────────────────────────────────────
   const updateFlights = useCallback(async () => {
@@ -354,123 +366,6 @@ export default function GlobeViewer() {
     }
   }, []);
 
-  // ── Fetch + update vessels ──────────────────────────────────────
-  const updateVessels = useCallback(async () => {
-    const viewer = viewerRef.current;
-    if (!viewer || viewer.isDestroyed()) return;
-    const Cesium = (window as any).Cesium;
-
-    try {
-      const res = await fetch("/api/vessels");
-      if (!res.ok) return;
-      const data = await res.json();
-      if (data.error) return; // API key not set — silently skip
-      const vessels: VesselData[] = data.vessels ?? [];
-      const seen = new Set<string>();
-
-      for (const v of vessels) {
-        if (!v.mmsi || v.lat == null || v.lon == null) continue;
-        seen.add(v.mmsi);
-        vesselDataRef.current.set(v.mmsi, v);
-
-        // Update history trail
-        const history = vesselHistoryRef.current.get(v.mmsi) ?? [];
-        const last = history[history.length - 1];
-        if (!last || Math.abs(last[0] - v.lon) > 0.001 || Math.abs(last[1] - v.lat) > 0.001) {
-          history.push([v.lon, v.lat]);
-          if (history.length > MAX_TRAIL_POINTS) history.shift();
-          vesselHistoryRef.current.set(v.mmsi, history);
-        }
-
-        const color = shipColorCss(v.shipType);
-        const position = Cesium.Cartesian3.fromDegrees(v.lon, v.lat, 10); // 10m above sea
-        const show = showVesselsRef.current;
-
-        // Billboard entity
-        if (vesselEntitiesRef.current.has(v.mmsi)) {
-          const e = vesselEntitiesRef.current.get(v.mmsi)!;
-          e.position = position;
-          e.billboard.image = shipSvgUri(color, v.heading);
-          e.billboard.show = show;
-          e.label.show = show;
-        } else {
-          const CesiumColor = Cesium.Color.fromCssColorString(color);
-          const e = viewer.entities.add({
-            id: `vessel_${v.mmsi}`,
-            position,
-            billboard: {
-              image: shipSvgUri(color, v.heading),
-              width: 24, height: 24,
-              verticalOrigin: Cesium.VerticalOrigin.CENTER,
-              horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-              show,
-              sizeInMeters: false,
-              eyeOffset: new Cesium.Cartesian3(0, 0, -100), // render behind aircraft
-            },
-            label: {
-              text: v.name || v.mmsi,
-              font: "9px monospace",
-              fillColor: CesiumColor,
-              outlineColor: Cesium.Color.BLACK,
-              outlineWidth: 2,
-              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-              pixelOffset: new Cesium.Cartesian2(0, -18),
-              verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-              show,
-              translucencyByDistance: new Cesium.NearFarScalar(5e4, 1.0, 1.5e6, 0.0),
-            },
-          });
-          vesselEntitiesRef.current.set(v.mmsi, e);
-        }
-
-        // Polyline trail
-        const history2 = vesselHistoryRef.current.get(v.mmsi) ?? [];
-        if (history2.length >= 2) {
-          const positions = history2.map(([lon, lat]) =>
-            Cesium.Cartesian3.fromDegrees(lon, lat, 10)
-          );
-          const trailColor = Cesium.Color.fromCssColorString(color).withAlpha(0.5);
-
-          if (vesselTrailsRef.current.has(v.mmsi)) {
-            const trail = vesselTrailsRef.current.get(v.mmsi)!;
-            trail.polyline.positions = positions;
-            trail.polyline.show = show;
-          } else {
-            const trail = viewer.entities.add({
-              id: `trail_${v.mmsi}`,
-              polyline: {
-                positions,
-                width: 1.5,
-                material: new Cesium.PolylineGlowMaterialProperty({
-                  glowPower: 0.15,
-                  color: trailColor,
-                }),
-                show,
-                clampToGround: false,
-              },
-            });
-            vesselTrailsRef.current.set(v.mmsi, trail);
-          }
-        }
-      }
-
-      // Remove stale vessels
-      for (const [mmsi, entity] of vesselEntitiesRef.current) {
-        if (!seen.has(mmsi)) {
-          viewer.entities.remove(entity);
-          vesselEntitiesRef.current.delete(mmsi);
-          const trail = vesselTrailsRef.current.get(mmsi);
-          if (trail) { viewer.entities.remove(trail); vesselTrailsRef.current.delete(mmsi); }
-        }
-      }
-
-      setVesselCount(seen.size);
-      setSelectedVessel(prev => prev ? (vesselDataRef.current.get(prev.mmsi) ?? null) : null);
-    } catch (e) {
-      console.warn("[vessels] update error", e);
-    }
-  }, []);
-
   // ── Init ──────────────────────────────────────────────────────
   useEffect(() => {
     let active = true;
@@ -478,10 +373,13 @@ export default function GlobeViewer() {
       try {
         loadCSS(`${CESIUM_CDN}/Widgets/widgets.css`);
         (window as any).CESIUM_BASE_URL = `${CESIUM_CDN}/`;
-        await loadScript(`${CESIUM_CDN}/Cesium.js`);
+        await loadCesiumScript(`${CESIUM_CDN}/Cesium.js`);
         if (!active || !containerRef.current) return;
 
         const Cesium = (window as any).Cesium;
+        if (!Cesium?.Ion) {
+          throw new Error("Cesium loaded but window.Cesium.Ion is missing");
+        }
         Cesium.Ion.defaultAccessToken = CESIUM_TOKEN;
 
         const viewer = new Cesium.Viewer(containerRef.current, {
@@ -539,10 +437,6 @@ export default function GlobeViewer() {
         await updateFlights();
         pollRef.current = setInterval(updateFlights, POLL_INTERVAL_MS);
 
-        // Start vessel tracking (fire-and-forget, fails silently without API key)
-        updateVessels();
-        vesselPollRef.current = setInterval(updateVessels, VESSEL_POLL_MS);
-
       } catch (err) {
         console.error(err);
         if (active) setError("Failed to initialise globe.");
@@ -553,11 +447,10 @@ export default function GlobeViewer() {
     return () => {
       active = false;
       if (pollRef.current) clearInterval(pollRef.current);
-      if (vesselPollRef.current) clearInterval(vesselPollRef.current);
       handlerRef.current?.destroy();
       if (viewerRef.current && !viewerRef.current.isDestroyed()) viewerRef.current.destroy();
     };
-  }, [updateFlights, updateVessels]);
+  }, [updateFlights]);
 
   const toggleFlights = useCallback(() => {
     const next = !showFlightsRef.current;
@@ -723,11 +616,11 @@ export default function GlobeViewer() {
       )}
 
       {/* Counters */}
-      {ready && flightCount > 0 && (
+      {ready && (flightCount > 0 || vesselCount > 0) && (
         <div className="flight-counter">
           <span className="counter-dot" />
-          {flightCount} AIRCRAFT
-          {vesselCount > 0 && <span className="counter-sep">|</span>}
+          {flightCount > 0 && <>{flightCount} AIRCRAFT</>}
+          {flightCount > 0 && vesselCount > 0 && <span className="counter-sep">|</span>}
           {vesselCount > 0 && <>{vesselCount} VESSELS</>}
           {lastUpdate && <span className="counter-time">{lastUpdate}</span>}
         </div>
